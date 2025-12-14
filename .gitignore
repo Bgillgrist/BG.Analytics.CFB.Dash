@@ -1,1 +1,10 @@
-app/.streamlit/secrets.toml
+# Streamlit secrets (never commit)
+.streamlit/secrets.toml
+
+# Ignore everything in .streamlit except config.toml
+.streamlit/*
+!.streamlit/config.toml
+
+# Python cache
+__pycache__/
+*.pyc
