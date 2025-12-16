@@ -1,4 +1,5 @@
 streamlit
+streamlit_navigation_bar
 pandas
 sqlalchemy
 psycopg[binary]

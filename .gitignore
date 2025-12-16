@@ -1,4 +1,4 @@
-# Streamlit secrets (never commit)
+# Streamlit secrets
 .streamlit/secrets.toml
 
 # Ignore everything in .streamlit except config.toml
