@@ -40,7 +40,7 @@ with col_left:
     st.write(
         """
 
-        This dashboard is created by Brennan Gillgrist, a sports data scientist, 
+        This dashboard was created by Brennan Gillgrist, a sports data scientist 
         who aims to give College Football fans a better way to track their team's 
         performance and projections throughout the season. Within the dashboard you 
         will find a variety of single-team and league-wide analytics so you can 
