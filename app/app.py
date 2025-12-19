@@ -65,6 +65,7 @@ st.markdown("""
 pages = {
     "General": [
         st.Page("pages/home.py", title="Home"),
+        st.Page("pages/metrics_explained.py", title="Metrics Explained"),
         st.Page("pages/about_me.py", title="About Me"),
     ],
     "Single Team": [
