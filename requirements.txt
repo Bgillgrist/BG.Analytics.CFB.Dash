@@ -2,5 +2,5 @@ streamlit
 streamlit_navigation_bar
 pandas
 sqlalchemy
-psycopg[binary]
+psycopg[binary]>=3.2
 python-dotenv

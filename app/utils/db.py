@@ -4,17 +4,22 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 
 def _get_db_url() -> str:
-    # Streamlit Cloud: use st.secrets
-    if "NEON_DATABASE_URL" in st.secrets:
-        return st.secrets["NEON_DATABASE_URL"]
+    # 1) Streamlit Cloud (or local if secrets.toml exists)
+    try:
+        db_url = st.secrets.get("NEON_DATABASE_URL", None)
+        if db_url:
+            return db_url
+    except Exception:
+        # No secrets.toml locally (common in Codespaces)
+        pass
 
-    # Local dev: use env var
+    # 2) Local dev / Codespaces: use env var
     db_url = os.getenv("NEON_DATABASE_URL")
     if db_url:
         return db_url
 
     raise RuntimeError(
-        "Missing NEON_DATABASE_URL. Set it in Streamlit secrets (cloud) or in your local environment/.env."
+        "Missing NEON_DATABASE_URL. Set it in Streamlit secrets (cloud) or as an environment variable."
     )
 
 @st.cache_resource
