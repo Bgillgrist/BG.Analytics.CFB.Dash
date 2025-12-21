@@ -52,6 +52,27 @@ with col_left:
         """
     )
 
+    # Accolates to build credibility
+    st.markdown(
+        """
+        <div style="font-size:2.2rem; font-weight:800; margin-bottom:0.5rem;">
+            Why Trust It?
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.write(
+        """
+
+        @BG.Analytics has been trusted by over 100 different College Football 
+        fan pages to provide game predictions and season-long projections for 
+        their teams. We provide College Football analytics to over 1 Million 
+        fans every month!
+
+        """
+    )
+
 with col_right:
     st.markdown(
         """
