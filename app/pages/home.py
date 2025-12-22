@@ -1,35 +1,27 @@
 import streamlit as st
 import requests
-import pandas as pd
-import os
+import time
+import datetime as dt
 from utils.db import read_df
 
 st.set_page_config(page_title="BG.Analytics CFB Home", layout="wide")
 
-##############################
-#Find Secret Variables
-def get_secret_or_env(key: str) -> str:
-    # Streamlit Cloud
-    if key in st.secrets:
-        return st.secrets[key]
-    # Local terminal env var
-    val = os.getenv(key)
-    if val:
-        return val
-    raise RuntimeError(f"Missing {key}. Set it in Streamlit secrets or in your terminal env vars.")
-
-##############################
-# Grab Instagram data
 @st.cache_data(ttl=3600)
-def fetch_ig_insights_30d():
-
-    ig_user_id = get_secret_or_env("IG_USER_ID")
-    token = get_secret_or_env("META_PAGE_ACCESS_TOKEN")
+def fetch_ig_metrics_30d(ig_user_id: str, token: str) -> tuple[int, int, int, dict]:
+    """
+    Returns: (accounts_engaged_30d, total_interactions_30d, views_30d, debug_window)
+    """
+    # Last 30 full days (ending now)
+    until = int(time.time())
+    since = until - 30 * 24 * 60 * 60
 
     url = f"https://graph.facebook.com/v24.0/{ig_user_id}/insights"
     params = {
-        "metric": "follower_count,reach,views,accounts_engaged",
+        "metric": "accounts_engaged,total_interactions,views",
+        "metric_type": "total_value",
         "period": "day",
+        "since": since,
+        "until": until,
         "access_token": token,
     }
 
@@ -37,29 +29,20 @@ def fetch_ig_insights_30d():
     r.raise_for_status()
     data = r.json().get("data", [])
 
-    def _series_sum(metric_name: str) -> float:
+    def _total(metric_name: str) -> int:
         metric = next((m for m in data if m.get("name") == metric_name), None)
-        if not metric:
-            return 0.0
-        values = metric.get("values", [])
-        # sum last 30 daily values (some tokens return more history)
-        return float(sum(v.get("value", 0) for v in values[-30:]))
+        tv = (metric or {}).get("total_value") or {}
+        return int(tv.get("value", 0))
 
-    def _latest(metric_name: str) -> float:
-        metric = next((m for m in data if m.get("name") == metric_name), None)
-        if not metric:
-            return 0.0
-        values = metric.get("values", [])
-        if not values:
-            return 0.0
-        return float(values[-1].get("value", 0))
+    debug_window = {
+        "since_unix": since,
+        "until_unix": until,
+        "since_readable": dt.datetime.fromtimestamp(since).strftime("%Y-%m-%d %H:%M:%S"),
+        "until_readable": dt.datetime.fromtimestamp(until).strftime("%Y-%m-%d %H:%M:%S"),
+        "raw_names_returned": [m.get("name") for m in data],
+    }
 
-    followers = int(_latest("follower_count"))         # snapshot-ish
-    reach_30d = int(_series_sum("reach"))              # last 30 daily values
-    views_30d = int(_series_sum("views"))              # last 30 daily values
-    engaged_30d = int(_series_sum("accounts_engaged")) # last 30 daily values
-
-    return followers, reach_30d, views_30d, engaged_30d
+    return _total("accounts_engaged"), _total("total_interactions"), _total("views"), debug_window
 
 ##############################
 # Conference finder for filter
@@ -132,21 +115,24 @@ with col_left:
     )
 
     try:
-        followers, reach_30d, views_30d, engaged_30d = fetch_ig_insights_30d()
+        accounts_engaged_30d, total_interactions_30d, views_30d, win = fetch_ig_metrics_30d(IG_USER_ID, META_PAGE_ACCESS_TOKEN)
 
-        st.markdown("#### Live Instagram Stats (Last 30 Days)")
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric("Followers", f"{followers:,}")
-        c2.metric("Accounts Engaged (30d)", f"{engaged_30d:,}")
-        c3.metric("Pages Reached (30d)", f"{reach_30d:,}")
-        c4.metric("Views (30d)", f"{views_30d:,}")
-        
+        st.markdown(
+            """
+            <div style="font-size:1.5rem; font-weight:800; margin-bottom:0.5rem;">
+                Instagram Statistcs (Past 30 Days):
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.caption(f"Window used: {win['since_readable']} → {win['until_readable']}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Accounts Engaged", f"{accounts_engaged_30d:,}")
+        c2.metric("Interactions", f"{total_interactions_30d:,}")
+        c3.metric("Views", f"{views_30d:,}")
 
     except Exception as e:
         st.info("Instagram stats are temporarily unavailable.")
-        # Optional: show the error while you're building
-        st.caption(f"Debug: {e}")
 
 with col_right:
     st.markdown(
