@@ -4,6 +4,9 @@ import time
 import datetime as dt
 from utils.db import read_df
 
+IG_USER_ID = st.secrets["IG_USER_ID"]
+META_PAGE_ACCESS_TOKEN = st.secrets["META_PAGE_ACCESS_TOKEN"]
+
 st.set_page_config(page_title="BG.Analytics CFB Home", layout="wide")
 
 @st.cache_data(ttl=3600)
