@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from utils.db import read_df
+from datetime import datetime
 
 # Pull game data from Neon and find all unique teams
 game_data = read_df("""
@@ -47,3 +48,31 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+# Run everything when a team is selected:
+now = pd.Timestamp.now(tz="UTC")
+if selected_team:
+
+    team_games = game_data[
+        (game_data["hometeam"] == selected_team) |
+        (game_data["awayteam"] == selected_team)
+    ].copy()
+
+    team_games["startdate"] = pd.to_datetime(team_games["startdate"], utc=True)
+
+    upcoming_games = team_games[
+        team_games["startdate"] > now
+    ].sort_values("startdate")
+
+    # Create two columns for the side by side
+    left_col, right_col = st.columns(2)
+
+    with left_col:
+        st.subheader(f"Upcoming Games for {selected_team}")
+        st.dataframe(
+            upcoming_games.assign(
+                Date=pd.to_datetime(upcoming_games["startdate"]).dt.strftime("%m/%d/%Y")
+            )[["Date", "hometeam", "awayteam"]],
+            hide_index=True,
+            use_container_width=True
+        )
