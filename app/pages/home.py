@@ -14,7 +14,7 @@ def fetch_ig_metrics_30d(ig_user_id: str, token: str) -> tuple[int, int, int, di
     """
     Returns: (accounts_engaged_30d, total_interactions_30d, views_30d, debug_window)
     """
-    # Last 30 full days (ending now)
+    # Last n days
     until = int(time.time())
     since = until - 30 * 24 * 60 * 60
 
