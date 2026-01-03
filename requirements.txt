@@ -4,3 +4,4 @@ pandas
 sqlalchemy
 psycopg[binary]>=3.2
 python-dotenv
+plotly>=5.18.0
