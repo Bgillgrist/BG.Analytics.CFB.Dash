@@ -54,10 +54,12 @@ WITH confs AS (
   SELECT DISTINCT homeconference AS conf
   FROM public.game_data
   WHERE homeconference IS NOT NULL AND homeconference <> ''
+    AND homeclassification IN ('fbs', 'fcs')
   UNION
   SELECT DISTINCT awayconference AS conf
   FROM public.game_data
   WHERE awayconference IS NOT NULL AND awayconference <> ''
+    AND awayclassification IN ('fbs', 'fcs')
 )
 SELECT conf
 FROM confs
@@ -179,13 +181,15 @@ with col_right:
 
     sql = f"""
     SELECT
-        TO_CHAR(startdate::date, 'MM/DD/YYYY') AS game_date,
+        TO_CHAR((startdate AT TIME ZONE 'America/New_York')::date, 'MM/DD/YYYY') AS game_date,
         hometeam AS home,
         awayteam AS away
     FROM public.game_data
     WHERE
         (homepoints IS NULL OR awaypoints IS NULL)
-        AND startdate::date >= CURRENT_DATE
+        AND (startdate AT TIME ZONE 'America/New_York')::date >= CURRENT_DATE
+        AND homeclassification IN ('fbs', 'fcs')
+        AND awayclassification IN ('fbs', 'fcs')
         {extra_where}
     ORDER BY startdate ASC
     LIMIT 25;
