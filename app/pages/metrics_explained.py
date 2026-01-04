@@ -8,7 +8,7 @@ import textwrap
 st.markdown(
     textwrap.dedent("""
 <div style="font-size:2.2rem; font-weight:800; margin-bottom:0.75rem;">
-  What are Power Ratings?
+  What are Power Ratings and why do we use them?
 </div>
 
 <div style="
@@ -20,7 +20,8 @@ st.markdown(
   line-height: 1.7;
   font-family: inherit;
 ">
-  <strong>The Main Idea:</strong><br><br> 
+  <span style="font-size: 1.4rem; font-weight: 700;">
+  <strong>The Main Idea:</strong></span><br><br> 
                     
   Power Ratings are a way to measure how good a team <strong>actually</strong> is, 
   not just what the team’s record shows.
@@ -49,15 +50,16 @@ font-weight: 500;
 line-height: 1.7;
 font-family: inherit;
 ">
-<strong>How do we determine which of two teams is better?</strong><br><br>
+<span style="font-size: 1.4rem; font-weight: 700;">
+<strong>How do we determine which of two teams is better?</strong></span><br><br>
 
 There are many different ways to do this that I hear from people. The main one 
 is usually "Head to Head" results but I think its clear that no one really holds 
 head to head as the standard as its clear that upsets do happen. an FCS team beating 
 a good FBS team obviouly wouldn't mean that they are better.
 
-Some people would look to specific stats like average MOV, maybe even a more advanced 
-metric like the BCS Rankings or the ESPN FPI, but these metrics will never 
+Some people would look to specific stats like average MOV or maybe even a more 
+advanced metric like the BCS Rankings but these metrics will never 
 contain every piece of information about a team necessary to determine which 
 team is better.
 
@@ -78,6 +80,7 @@ is the "best" so what should we use?
     unsafe_allow_html=True
 )
 
+# What is the best measure of power?
 st.markdown(
     textwrap.dedent("""
 <div style="
@@ -89,10 +92,37 @@ font-weight: 500;
 line-height: 1.7;
 font-family: inherit;
 ">
-<strong>What is the best estimate of team "Power"</strong><br><br>
+<span style="font-size: 1.4rem; font-weight: 700;">
+<strong>What is the best estimate of team "Power"</strong></span><br><br>
 
-blah blah blah
+Since our goal is to determine which team would win at least 16/30 games in 30 
+hypohetical neutral-site matchups, we need to choose a metric that predicts 
+the outcomes of future games. This brings us to a new question: what model predicts 
+the results of future games at the highest rate? Obviously we would want to use 
+Vegas models if possible but there is no access to the power ratings they use to 
+generate their win probabilities and spreads. Therefore we must create our own 
+versions of these. This is where the Power Ratings Come in:
+</div>
+"""),
+    unsafe_allow_html=True
+)
 
+# How do we create our own power ratings?
+st.markdown(
+    textwrap.dedent("""
+<div style="
+border-left: 4px solid #00ff00;
+padding-left: 1rem;
+margin-bottom: 1.25rem;
+font-size: 1.15rem;
+font-weight: 500;
+line-height: 1.7;
+font-family: inherit;
+">
+<span style="font-size: 1.4rem; font-weight: 700;">
+<strong>How do we create our own power ratings?</strong></span><br><br>
+
+write out here...
 </div>
 """),
     unsafe_allow_html=True
