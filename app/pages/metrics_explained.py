@@ -20,7 +20,7 @@ st.markdown(textwrap.dedent(f"""
 <!-- GROUP 1 WRAPPER (Blocks 1–2) -->
 <!-- ========================= -->
 <div style="
-  border-left: 10px solid #000000;
+  border-left: 10px solid #777777;
   padding-left: 1.25rem;
   margin-bottom: 1.75rem;
 ">
@@ -95,7 +95,7 @@ st.markdown(textwrap.dedent(f"""
 </div>
 
 <div style="
-  border-left: 10px solid #000000;
+  border-left: 10px solid #777777;
   padding-left: 1.25rem;
   margin-bottom: 1.75rem;
 ">
@@ -163,14 +163,7 @@ games = pd.DataFrame([
     {"game": 12, "team": "Alabama", "opp": "Auburn",  "team_rating": 14, "opp_rating": 7, "result": "W"},
 ])
 
-TEAM_COLOR = "#FC0000"
-
-OPP_COLORS = {
-    "Texas": "#1f77b4",
-    "Ole Miss": "#0033A0",
-    "Auburn": "#0C2340",
-    "Georgia": "#BA0C2F",
-}
+TEAM_COLOR = "#9e1b32"
 
 def record_through(game_n: int):
     subset = games[games["game"] <= game_n]
@@ -181,7 +174,7 @@ def record_through(game_n: int):
 
 def build_fig(row):
     y_level = 1
-    opp_color = OPP_COLORS.get(row["opp"], "#888888")
+    opp_color = "#888888"
 
     fig = go.Figure()
 
@@ -216,7 +209,7 @@ def build_fig(row):
 
     fig.update_yaxes(visible=False, range=[0.5, 1.5])
     fig.update_xaxes(
-        title="Game Power Rating (spread-like scale)",
+        title="Game Power Rating",
         range=[-40, 40],
         zeroline=True,
         zerolinewidth=2
@@ -296,3 +289,83 @@ with colL:
 
     fig = build_fig(row)
     st.plotly_chart(fig, use_container_width=True, key="power_rating_stepper_chart")
+
+st.markdown(textwrap.dedent(f"""
+<div style="font-size:2.3rem; font-weight:900; margin-bottom:1rem;">
+  Considerations:
+</div>
+
+<!-- ========================= -->
+<!-- GROUP 1 WRAPPER (Blocks 1–2) -->
+<!-- ========================= -->
+<div style="
+  border-left: 10px solid #777777;
+  padding-left: 1.25rem;
+  margin-bottom: 1.75rem;
+">
+
+  <!-- Block 1 -->
+  <div style="
+    border-left: 4px solid #00ff00;
+    padding-left: 1rem;
+    margin-bottom: 1.25rem;
+    font-size: {BODY_SIZE};
+    font-weight: 500;
+    line-height: 1.7;
+  ">
+    <div style="font-size:{H2_SIZE}; font-weight:800; margin-bottom:0.5rem;">
+      The "Game Rating" Question
+    </div>
+    The visual above is helpful for seeing how a team wins a game, however it is important to note 
+    that it is not always visually apparent to the viewer what level the two teams were playing at. 
+    A game ending 27-24 in FBS is not at the same end of the spectrum as a game ending 27-24 in FCS. 
+    Therefore, in every game we don't always know if team A beat team B because team A played at a high 
+    level, or of team B played at a low level. Furthermore, just because a team wins a game doesn't 
+    mean they played good and just because a team loses a game doesn't mean they played bad. Sometimes 
+    the other team was just better or worse. Creating models and comparing outcomes between teams on 
+    different levels (conference, division, ect.) allows us to figure out where on the scale specific 
+    games lie and thus helps us find where the team lies overall for the season.
+  </div>
+
+  <!-- Block 2 -->
+  <div style="
+    border-left: 4px solid #0000ff;
+    padding-left: 1rem;
+    margin-bottom: 0.25rem;
+    font-size: {BODY_SIZE};
+    font-weight: 500;
+    line-height: 1.7;
+  ">
+    <div style="font-size:{H2_SIZE}; font-weight:800; margin-bottom:0.5rem;">
+      Sample Size
+    </div>
+    The biggest issue with this method is the lack of data. Even by the end of the season, 12 games 
+    is hardly enought to conclude exactly where a team should lie on the power ratings scale. This 
+    may not be intuitive but imagine you are shooting free throws. The goal is for you to determine 
+    what your true FT% is. If you shot 12 free throws and made all 12 of them, would you then conclude 
+    that you shoot at 100% FT%? Obviously not. 12 is a laughably low sample size and the same is true 
+    for CFB games. Since we never get to play out a large number of games, we must use a few other methods 
+    to try to make up for the lack of data.
+    <br><br>
+    Method 1: Scale all power ratings back toward some overall average. Let's say Ohio State just finished 
+    5 games and they beat every opponent (who were all average teams) by 70 points. Is it reasonable 
+    to conclude that Ohio State is better than the average team by over 70 points? Possible, but 
+    unlikely. We can scale back Ohio State's rating a bit to the Big 10 average rating to make it 
+    more realistic until more games are completed. As the season progresses, the weight of the conference 
+    average slowly has less importance as we learn more about the team.
+    <br><br>
+    Method 2: Using Preseason and Historical data. While everyone complains about the presence of 
+    preseason information in power ratings, preseason + historical data provide valuable information 
+    in predicting the outcomes of future games and while there are always outliers, on average we find 
+    it more useful to include this data than to exclude it. Teams with many 5 star recruits, highly rated 
+    transfers, and elite returning production will often perform better than their counterparts who 
+    are missing the elite talent. While not a rule (2025 Indiana), we do find that these teams often 
+    perform at a higher caliper than teams missing these players. By slowly decreasing the importance 
+    of this preseason data throughout the season, we can create a power rating model that updates throughout 
+    the season as more data comes in and predicts the outcomes of future games at a high rate.<br>
+    <em>See below another visual that displays how preseason and current season data combine together 
+    to create a more accurate power ratings model:</em>
+  </div>
+
+</div>
+"""), unsafe_allow_html=True)
