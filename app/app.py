@@ -70,7 +70,11 @@ pages = {
     ],
     "Single Team": [
         st.Page("pages/single_team_projections.py", title="Projections"),
-        st.Page("pages/single_team_report_card.py", title="Report Card"),
+        st.Page("pages/single_team_season_report_card.py", title="Season Report Card"),
+        st.Page("pages/single_team_game_report_card.py", title="Game Report Card"),
+    ],
+    "League Wide": [
+        st.Page("pages/team_rankings.py", title="Team Rankings"),
     ],
 }
 

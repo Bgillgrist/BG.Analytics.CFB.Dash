@@ -1,6 +1,7 @@
 import streamlit as st
 import textwrap
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 
 H1_SIZE = "2.8rem"   # main page header
@@ -17,7 +18,7 @@ st.markdown(textwrap.dedent(f"""
 </div>
 
 <!-- ========================= -->
-<!-- GROUP 1 WRAPPER (Blocks 1–2) -->
+<!-- First group for the "Why"
 <!-- ========================= -->
 <div style="
   border-left: 10px solid #777777;
@@ -25,7 +26,7 @@ st.markdown(textwrap.dedent(f"""
   margin-bottom: 1.75rem;
 ">
 
-  <!-- Block 1 -->
+  <!-- The Main Idea -->
   <div style="
     border-left: 4px solid #FC0000;
     padding-left: 1rem;
@@ -49,7 +50,7 @@ st.markdown(textwrap.dedent(f"""
     <em>What does it mean for a team to be “better” than another team?</em>
   </div>
 
-  <!-- Block 2 -->
+  <!-- How do we determine which of two teams is better? -->
   <div style="
     border-left: 4px solid #FC7E00;
     padding-left: 1rem;
@@ -88,7 +89,7 @@ st.markdown(textwrap.dedent(f"""
 </div>  <!-- END GROUP 1 -->
 
 <!-- ========================= -->
-<!-- GROUP 2 WRAPPER (Block 3 only) -->
+<!-- The "What" group
 <!-- ========================= -->
 <div style="font-size:2.3rem; font-weight:900; margin-bottom:1rem;">
   The What:
@@ -100,7 +101,7 @@ st.markdown(textwrap.dedent(f"""
   margin-bottom: 1.75rem;
 ">
 
-  <!-- Block 3 -->
+  <!-- What is the Power Rating and how is it formed? -->
   <div style="
     border-left: 4px solid #FCFC00;
     padding-left: 1rem;
@@ -296,7 +297,7 @@ st.markdown(textwrap.dedent(f"""
 </div>
 
 <!-- ========================= -->
-<!-- GROUP 1 WRAPPER (Blocks 1–2) -->
+<!-- Extra Considerations Section -->
 <!-- ========================= -->
 <div style="
   border-left: 10px solid #777777;
@@ -304,7 +305,7 @@ st.markdown(textwrap.dedent(f"""
   margin-bottom: 1.75rem;
 ">
 
-  <!-- Block 1 -->
+  <!-- The "Game Rating" Question -->
   <div style="
     border-left: 4px solid #00ff00;
     padding-left: 1rem;
@@ -327,7 +328,7 @@ st.markdown(textwrap.dedent(f"""
     games lie and thus helps us find where the team lies overall for the season.
   </div>
 
-  <!-- Block 2 -->
+  <!-- Sample Size -->
   <div style="
     border-left: 4px solid #0000ff;
     padding-left: 1rem;
@@ -369,3 +370,226 @@ st.markdown(textwrap.dedent(f"""
 
 </div>
 """), unsafe_allow_html=True)
+
+# -----------------------------
+# Posterior Story (MANUAL curves)
+# -----------------------------
+import numpy as np
+import plotly.graph_objects as go
+import streamlit as st
+
+st.markdown("<div style='font-size:2.0rem; font-weight:900;'>How we combine preseason and current season data:</div>", unsafe_allow_html=True)
+
+# ----- YOU CONTROL THESE -----
+METRIC_NAME = "True Rating"
+X_MIN, X_MAX = -40, 40
+
+# 1) Prior (wide)
+MU_PRIOR = 8.0
+SIGMA_PRIOR = 16.0
+
+# 2) Season evidence distribution (game-to-game variation; still fairly wide)
+MU_DATA = 14.0
+SIGMA_DATA = 7.0
+
+# 3) Posterior (medium)
+MU_POST = 12.5
+SIGMA_POST = 9.0
+
+# Optional: show some “game dots” around the season evidence mean
+SHOW_GAME_DOTS = True
+N_GAMES = 8
+DOT_SIGMA = 12.0  # spread of the dots (usually similar to SIGMA_DATA)
+
+rng = np.random.default_rng(7)
+game_dots = rng.normal(MU_DATA, DOT_SIGMA, size=N_GAMES)
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def normal_pdf(x, mu, sigma):
+    return (1.0 / (sigma * np.sqrt(2*np.pi))) * np.exp(-0.5 * ((x - mu)/sigma)**2)
+
+x = np.linspace(X_MIN, X_MAX, 800)
+
+prior_pdf = normal_pdf(x, MU_PRIOR, SIGMA_PRIOR)
+data_pdf  = normal_pdf(x, MU_DATA,  SIGMA_DATA)
+post_pdf  = normal_pdf(x, MU_POST,  SIGMA_POST)
+
+# scale so they sit nicely together
+scale = max(prior_pdf.max(), data_pdf.max(), post_pdf.max())
+prior_y = prior_pdf / scale
+data_y  = data_pdf  / scale
+post_y  = post_pdf  / scale
+
+def build_fig(step: int):
+    """
+    step:
+      0 = prior only
+      1 = explain prior
+      2 = add season dots
+      3 = add season curve
+      4 = add posterior curve
+      5 = recap (show all)
+    """
+    fig = go.Figure()
+
+    # baseline axis line
+    fig.add_trace(go.Scatter(
+        x=[X_MIN, X_MAX], y=[0, 0],
+        mode="lines",
+        line=dict(width=2),
+        hoverinfo="skip",
+        showlegend=False
+    ))
+
+    # Prior
+    fig.add_trace(go.Scatter(
+        x=x, y=prior_y,
+        mode="lines",
+        line=dict(width=4),
+        name="Prior (Preseason belief)"
+    ))
+
+    # Game dots
+    if step >= 2 and SHOW_GAME_DOTS:
+        fig.add_trace(go.Scatter(
+            x=game_dots,
+            y=np.zeros_like(game_dots),
+            mode="markers",
+            marker=dict(size=10),
+            name="Season games (dots)"
+        ))
+
+    # Season curve (game-to-game variation)
+    if step >= 3:
+        fig.add_trace(go.Scatter(
+            x=x, y=data_y,
+            mode="lines",
+            line=dict(width=4, dash="dot"),
+            name="Season evidence (game-to-game)"
+        ))
+
+    # Posterior
+    if step >= 4:
+        fig.add_trace(go.Scatter(
+            x=x, y=post_y,
+            mode="lines",
+            line=dict(width=5),
+            name="Posterior (Updated belief)"
+        ))
+
+    fig.update_layout(
+        height=420,
+        margin=dict(l=25, r=25, t=10, b=45),
+        xaxis=dict(title=METRIC_NAME, range=[X_MIN, X_MAX], zeroline=True, zerolinewidth=2),
+        yaxis=dict(visible=False, range=[-0.15, 1.15]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0)
+    )
+
+    # Mean markers (super helpful for beginners)
+    fig.add_vline(x=MU_PRIOR, line_width=2, line_dash="dash")
+    if step >= 3:
+        fig.add_vline(x=MU_DATA, line_width=2, line_dash="dot")
+    if step >= 4:
+        fig.add_vline(x=MU_POST, line_width=3)
+
+    return fig
+
+def step_text(step: int):
+    if step == 0:
+        return """
+        **Step 1 — Preseason “Prior” Information:**  
+        Before any games are played, we only have a rough preseason belief about where the team might be rated 
+        based on recruiting rankings, transfer rankings, returning production, historical data, ect.
+        Because it’s very uncertain how a team will actually perform, the range of possible ratings is very **wide**. (See below)
+        """
+    if step == 1:
+        return f"""
+        **How to interpret the preseason chart:**  
+        This curve says: “Our best estimate of team rating before the season is **{MU_PRIOR:.1f}**,  
+        but it could realistically be much higher or lower. There is much uncertainty”
+        """
+    if step == 2:
+        return f"""
+        **Step 2 — Season games start being played (see the dots):**  
+        Each dot is one game’s rating as we did before.
+        Games bounce around because football is very variable (matchups, mistakes, home field advantage, injuries, etc.).
+        
+        In this example, we have **{N_GAMES}** games played so far.
+        """
+    if step == 3:
+        return f"""
+        **Step 3 — Game data gives us new information we can use:**  
+        The dotted curve shows the *range* of performances we are seeing in season.
+        It’s much more specific than the uncertain preseason prior, but still fairly wide because (as mentioned before) 
+        8 games is not a large sample size enough to prove that the true team rating is exactly at this new average.
+        
+        The center of the season ratings is around **{MU_DATA:.1f}**.
+        """
+    if step == 4:
+        return f"""
+        **Step 4 — An updated rating is created:**  
+        The final distribution is our updated belief after combining:
+        - preseason expectations, and
+        - season game data
+        
+        It becomes a balance between the preseason and current season data with a stronger emphasis toward the season data 
+        as it is more accurate to what is actually happening this season.
+        
+        Final distribution is centered **{MU_POST:.1f}**.
+        """
+    return f"""
+    **Note:**  
+    As more games are played, the updated final distribution will grow closer and closer to the season data.
+    This allows us to start the season using the preseason data which is more useful than a single game outcome, and slowly 
+    grow to lean more toward the actual game results as we get sufficient data.
+    """
+
+# -----------------------------
+# UI (stepper)
+# -----------------------------
+left, right = st.columns([2, 1])
+
+if "post_step" not in st.session_state:
+    st.session_state.post_step = 0
+
+MAX_STEP = 5
+
+with right:
+    st.markdown("### Controls")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("⏮ Start", use_container_width=True, key="manual_post_start"):
+            st.session_state.post_step = 0
+            st.rerun()
+    with c2:
+        if st.button("⏭ End", use_container_width=True, key="manual_post_end"):
+            st.session_state.post_step = MAX_STEP
+            st.rerun()
+
+    c3, c4 = st.columns(2)
+    with c3:
+        if st.button("◀ Prev", use_container_width=True, key="manual_post_prev"):
+            st.session_state.post_step = max(0, st.session_state.post_step - 1)
+            st.rerun()
+    with c4:
+        if st.button("Next ▶", use_container_width=True, key="manual_post_next"):
+            st.session_state.post_step = min(MAX_STEP, st.session_state.post_step + 1)
+            st.rerun()
+
+    st.markdown("---")
+    st.session_state.post_step = st.slider(
+        "Step",
+        0, MAX_STEP,
+        st.session_state.post_step,
+        key="manual_post_step_slider"
+    )
+
+    st.markdown("---")
+
+with left:
+    st.markdown(step_text(st.session_state.post_step))
+    fig = build_fig(st.session_state.post_step)
+    st.plotly_chart(fig, use_container_width=True, key="manual_posterior_story_chart")
