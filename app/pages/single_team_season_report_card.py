@@ -110,14 +110,29 @@ def get_team_hex(team: str | None) -> str:
         return "#4C78A8"
     df = read_df(
         """
-        SELECT "Color1"
-        FROM public.team_map
-        WHERE cfb_name = :team
+        WITH team_ids AS (
+            SELECT homeid::text AS team_id
+            FROM public.game_data
+            WHERE hometeam = :team
+              AND homeid IS NOT NULL
+
+            UNION
+
+            SELECT awayid::text AS team_id
+            FROM public.game_data
+            WHERE awayteam = :team
+              AND awayid IS NOT NULL
+        )
+        SELECT tm."Color"
+        FROM public.team_map tm
+        JOIN team_ids ti
+          ON tm."Id"::text = ti.team_id
+        WHERE tm."Color" IS NOT NULL
         LIMIT 1
         """,
         params={"team": team},
     )
-    return df["Color1"].iloc[0] if not df.empty else "#4C78A8"
+    return df["Color"].iloc[0] if not df.empty else "#4C78A8"
 
 
 def get_team_seasons(team: str | None) -> list[int]:

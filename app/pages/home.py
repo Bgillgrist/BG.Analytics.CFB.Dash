@@ -7,7 +7,7 @@ from utils.db import read_df
 IG_USER_ID = st.secrets["IG_USER_ID"]
 META_PAGE_ACCESS_TOKEN = st.secrets["META_PAGE_ACCESS_TOKEN"]
 
-st.set_page_config(page_title="BG.Analytics CFB Home", layout="wide")
+#st.set_page_config(page_title="BG.Analytics CFB Home", layout="wide")
 
 @st.cache_data(ttl=3600)
 def fetch_ig_metrics_30d(ig_user_id: str, token: str) -> tuple[int, int, int, dict]:
@@ -54,12 +54,12 @@ WITH confs AS (
   SELECT DISTINCT homeconference AS conf
   FROM public.game_data
   WHERE homeconference IS NOT NULL AND homeconference <> ''
-    AND homeclassification IN ('fbs', 'fcs')
+    AND homeclassification = 'fbs'
   UNION
   SELECT DISTINCT awayconference AS conf
   FROM public.game_data
   WHERE awayconference IS NOT NULL AND awayconference <> ''
-    AND awayclassification IN ('fbs', 'fcs')
+    AND awayclassification = 'fbs'
 )
 SELECT conf
 FROM confs
@@ -68,7 +68,7 @@ ORDER BY conf;
 conf_df = read_df(conf_sql)
 conferences = conf_df["conf"].tolist() if not conf_df.empty else []
 
-FILTER_OPTIONS = ["All", "FBS", "FCS"] + conferences
+FILTER_OPTIONS = ["All"] + conferences
 ##############################
 
 col_left, col_right = st.columns([4, 3])
@@ -161,16 +161,7 @@ with col_right:
     extra_where = ""
     params = {}
 
-    if selected_filter in ("FBS", "FCS"):
-        extra_where = """
-        AND (
-            LOWER(homeclassification) = LOWER(:cls)
-            OR LOWER(awayclassification) = LOWER(:cls)
-        )
-        """
-        params["cls"] = selected_filter
-
-    elif selected_filter != "All":
+    if selected_filter != "All":
         extra_where = """
           AND (
             homeconference = :conf
@@ -188,8 +179,8 @@ with col_right:
     WHERE
         (homepoints IS NULL OR awaypoints IS NULL)
         AND (startdate AT TIME ZONE 'America/New_York')::date >= CURRENT_DATE
-        AND homeclassification IN ('fbs', 'fcs')
-        AND awayclassification IN ('fbs', 'fcs')
+        AND homeclassification = 'fbs'
+        AND awayclassification = 'fbs'
         {extra_where}
     ORDER BY startdate ASC
     LIMIT 25;
