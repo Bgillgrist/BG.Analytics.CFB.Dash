@@ -5,3 +5,4 @@ sqlalchemy
 psycopg[binary]>=3.2
 python-dotenv
 plotly>=5.18.0
+pillow>=10.0.0
