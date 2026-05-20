@@ -496,7 +496,7 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <style>
         html, body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-        .map-wrap {{ width: 100%; height: 470px; position: relative; background: #f8fafc; }}
+        .map-wrap {{ width: 100%; height: 500px; position: relative; background: #f8fafc; padding-bottom: 58px; box-sizing: border-box; }}
         #schedule-map {{ width: 100%; height: 430px; border-radius: 8px; overflow: hidden; }}
         .map-title {{ font-size: 20px; font-weight: 700; margin: 0 0 6px 0; color: #111827; }}
         .map-controls {{
@@ -504,7 +504,7 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
           z-index: 1000;
           left: 12px;
           right: 12px;
-          bottom: 10px;
+          bottom: 18px;
           display: flex;
           align-items: center;
           gap: 8px;
@@ -579,9 +579,9 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
         let timer = null;
 
         const map = L.map("schedule-map", {{ zoomControl: true }});
-        L.tileLayer("https://tiles.stadiamaps.com/tiles/stamen_terrain/{{z}}/{{x}}/{{y}}{{r}}.png", {{
+        L.tileLayer("https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png", {{
           maxZoom: 19,
-          attribution: "&copy; Stadia Maps &copy; Stamen Design &copy; OpenStreetMap contributors"
+          attribution: "&copy; OpenStreetMap contributors &copy; CARTO"
         }}).addTo(map);
 
         const points = games.map((game) => [game.lat, game.lon]);
@@ -1010,6 +1010,6 @@ if selected_team:
         else:
             components.html(
                 build_schedule_map(schedule_map_df, selected_team),
-                height=490,
+                height=535,
                 scrolling=False,
             )
