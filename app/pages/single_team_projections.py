@@ -734,6 +734,13 @@ def win_probability_style(probability: float) -> str:
     return f"background-color: rgb({red}, {green}, {blue}); color: {text_color};"
 
 
+def style_win_probability_table(df: pd.DataFrame):
+    styled = df.style.format({"Win Probability": lambda x: "NA" if pd.isna(x) else f"{x:.1%}"})
+    if hasattr(styled, "map"):
+        return styled.map(win_probability_style, subset=["Win Probability"])
+    return styled.applymap(win_probability_style, subset=["Win Probability"])
+
+
 # ----------------------------
 # Data for dropdown
 # ----------------------------
@@ -852,9 +859,7 @@ if selected_team:
         )
 
         st.dataframe(
-            upcoming_display.style
-            .format({"Win Probability": lambda x: "NA" if pd.isna(x) else f"{x:.1%}"})
-            .applymap(win_probability_style, subset=["Win Probability"]),
+            style_win_probability_table(upcoming_display),
             hide_index=True,
             use_container_width=True,
         )
