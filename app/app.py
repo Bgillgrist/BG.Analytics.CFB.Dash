@@ -66,7 +66,7 @@ pages = {
     "General": [
         st.Page("pages/home.py", title="Home"),
         st.Page("pages/metrics_explained.py", title="Metrics Explained"),
-        st.Page("pages/about_me.py", title="About Me"),
+        #st.Page("pages/about_me.py", title="About Me"),
     ],
     "Single Team": [
         st.Page("pages/single_team_projections.py", title="Projections"),
@@ -75,6 +75,7 @@ pages = {
     ],
     "League Wide": [
         st.Page("pages/team_rankings.py", title="Team Rankings"),
+        st.Page("pages/schedule_analysis.py", title="Schedule Analysis"),
     ],
 }
 

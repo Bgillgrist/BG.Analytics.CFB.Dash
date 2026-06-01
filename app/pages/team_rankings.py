@@ -47,6 +47,7 @@ WIN_PROBABILITY_SPREAD_SCALE = 14.0
 COMPLETED_GAME_WEIGHT = 1.0
 PROJECTED_GAME_WEIGHT = 0.45
 MAX_MARGIN_SIGNAL = 42.0
+REGULAR_SEASON_FILTER = "LOWER(COALESCE(seasontype, 'regular')) <> 'postseason'"
 
 
 st.markdown(
@@ -355,6 +356,7 @@ def get_team_directory() -> pd.DataFrame:
             WHERE homeid IS NOT NULL
               AND hometeam IS NOT NULL
               AND homeclassification = 'fbs'
+              AND {REGULAR_SEASON_FILTER}
             GROUP BY homeid, hometeam
 
             UNION ALL
@@ -364,6 +366,7 @@ def get_team_directory() -> pd.DataFrame:
             WHERE awayid IS NOT NULL
               AND awayteam IS NOT NULL
               AND awayclassification = 'fbs'
+              AND {REGULAR_SEASON_FILTER}
             GROUP BY awayid, awayteam
         ),
         ranked AS (
@@ -440,7 +443,7 @@ def get_poll_rankings(poll: str, season: int, week: int) -> pd.DataFrame:
 @st.cache_data(ttl=300)
 def get_power_rating_seasons() -> list[int]:
     df = read_df(
-        """
+        f"""
         SELECT season
         FROM (
             SELECT DISTINCT season::int AS season
@@ -448,6 +451,7 @@ def get_power_rating_seasons() -> list[int]:
             WHERE season IS NOT NULL
               AND homeclassification = 'fbs'
               AND awayclassification = 'fbs'
+              AND {REGULAR_SEASON_FILTER}
 
             UNION
 
@@ -579,6 +583,7 @@ def get_power_rating_games(season: int) -> tuple[pd.DataFrame, str]:
           AND g.awayteam IS NOT NULL
           AND g.homeclassification = 'fbs'
           AND g.awayclassification = 'fbs'
+          AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
         """
     elif has_game_predictions:
         prediction_join_sql = f"""
@@ -600,6 +605,7 @@ def get_power_rating_games(season: int) -> tuple[pd.DataFrame, str]:
           AND g.awayteam IS NOT NULL
           AND g.homeclassification = 'fbs'
           AND g.awayclassification = 'fbs'
+          AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
         """
     else:
         prediction_join_sql = """
@@ -619,6 +625,7 @@ def get_power_rating_games(season: int) -> tuple[pd.DataFrame, str]:
           AND g.awayteam IS NOT NULL
           AND g.homeclassification = 'fbs'
           AND g.awayclassification = 'fbs'
+          AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
         """
 
     df = read_df(prediction_join_sql, {"season": int(season)})
@@ -849,6 +856,7 @@ def get_next_games(season: int, as_of_date: date | None) -> pd.DataFrame:
                 {start_select}
             FROM public.game_data
             WHERE season = :season
+              AND {REGULAR_SEASON_FILTER}
               AND hometeam IS NOT NULL
               AND awayteam IS NOT NULL
               AND homepoints IS NULL

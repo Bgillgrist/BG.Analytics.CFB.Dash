@@ -51,6 +51,8 @@ RANKING_OPTIONS = {
     },
 }
 
+REGULAR_SEASON_FILTER = "LOWER(COALESCE(seasontype, 'regular')) <> 'postseason'"
+
 
 # ----------------------------
 # Styling
@@ -109,12 +111,13 @@ def get_team_hex(team: str | None) -> str:
     if not team:
         return "#4C78A8"
     df = read_df(
-        """
+        f"""
         WITH team_ids AS (
             SELECT homeid::text AS team_id
             FROM public.game_data
             WHERE hometeam = :team
               AND homeid IS NOT NULL
+              AND {REGULAR_SEASON_FILTER}
 
             UNION
 
@@ -122,6 +125,7 @@ def get_team_hex(team: str | None) -> str:
             FROM public.game_data
             WHERE awayteam = :team
               AND awayid IS NOT NULL
+              AND {REGULAR_SEASON_FILTER}
         )
         SELECT tm."Color"
         FROM public.team_map tm
@@ -225,6 +229,7 @@ def get_season_prediction(team: str | None, season: int | None) -> pd.Series:
             FROM public.game_data
             WHERE hometeam = :team
               AND homeid IS NOT NULL
+              AND {REGULAR_SEASON_FILTER}
             GROUP BY homeid
 
             UNION ALL
@@ -233,6 +238,7 @@ def get_season_prediction(team: str | None, season: int | None) -> pd.Series:
             FROM public.game_data
             WHERE awayteam = :team
               AND awayid IS NOT NULL
+              AND {REGULAR_SEASON_FILTER}
             GROUP BY awayid
         ),
         selected_team_id AS (
@@ -286,6 +292,7 @@ def get_latest_ranking_projection(team: str | None, season: int | None) -> pd.Se
                         WHERE g.season = rp.season
                           AND g.week IS NOT NULL
                           AND g.startdate IS NOT NULL
+                          AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
                           AND (g.startdate AT TIME ZONE 'America/New_York')::date <= rp.run_date::date
                     ),
                     1
@@ -418,6 +425,7 @@ def get_schedule_map_data(team: str | None, season: int | None) -> pd.DataFrame:
         WHERE g.season = :season
           AND g.startdate IS NOT NULL
           AND g.venueid IS NOT NULL
+          AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
           AND (g.hometeam = :team OR g.awayteam = :team)
         ORDER BY g.startdate
         """,
@@ -745,12 +753,13 @@ def style_win_probability_table(df: pd.DataFrame):
 # Data for dropdown
 # ----------------------------
 game_data = read_df(
-    """
+    f"""
     SELECT *
     FROM public.game_data
     WHERE startdate IS NOT NULL
       AND homeclassification = 'fbs'
       AND awayclassification = 'fbs'
+      AND {REGULAR_SEASON_FILTER}
     """
 )
 current_season = int(game_data["season"].max())
@@ -808,10 +817,12 @@ if selected_team:
         LEFT JOIN public.game_predictions_full p
           ON p.game_prediction_run_id = r.game_prediction_run_id
          AND p.gameid = g.id::text
-        WHERE g.startdate IS NOT NULL
+        WHERE g.season = :season
+          AND g.startdate IS NOT NULL
           AND (g.hometeam = :team OR g.awayteam = :team)
           AND g.homeclassification = 'fbs'
           AND g.awayclassification = 'fbs'
+          AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
         """,
         params={"team": selected_team, "season": current_season},
     )
