@@ -692,7 +692,8 @@ def team_locations(schedule: pd.DataFrame) -> pd.DataFrame:
 
     assets = get_team_assets()
     if not assets.empty and assets["team_id"].notna().any():
-        teams = teams.merge(assets.drop_duplicates(subset=["team_id"]), on="team_id", how="left")
+        asset_columns = [col for col in TEAM_ASSET_COLUMNS if col != "team_key"]
+        teams = teams.merge(assets[asset_columns].drop_duplicates(subset=["team_id"]), on="team_id", how="left")
         if "map_venue_id" in teams.columns:
             teams["venue_id"] = teams["map_venue_id"].combine_first(teams["venue_id"])
 
