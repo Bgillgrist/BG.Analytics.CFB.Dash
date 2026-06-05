@@ -12,7 +12,10 @@ from utils.db import read_df
 ET_TZ = "America/New_York"
 FBS_FILTER = "homeclassification = 'fbs' AND awayclassification = 'fbs'"
 POWER_FIVE_CONFERENCES = {"SEC", "ACC", "Big Ten", "Big 10", "Big 12", "Pac-12", "Pac 12"}
-POWER_FIVE_MAP_CONFERENCES = POWER_FIVE_CONFERENCES | {"FBS Independents", "Independent", "Independents"}
+G5_CONFERENCES = {"American Athletic", "Conference USA", "Mid-American", "Mountain West", "Sun Belt"}
+INDEPENDENT_CONFERENCES = {"FBS Independents", "Independent", "Independents"}
+NOTRE_DAME_TEAM_KEYS = {"notre dame", "notre dame fighting irish"}
+UCONN_TEAM_KEYS = {"uconn", "connecticut", "uconn huskies", "connecticut huskies"}
 G5_CONFERENCE_PATTERNS = {
     "American Athletic": "diagonal",
     "Conference USA": "backDiagonal",
@@ -48,6 +51,14 @@ DEFAULT_CONFERENCE_ASSETS = {
     "Pac-12": {"color": "#964B00", "logo": "https://a.espncdn.com/i/teamlogos/ncaa_conf/500/9.png"},
     "SEC": {"color": "#FBCE28", "logo": "https://a.espncdn.com/i/teamlogos/ncaa_conf/500/8.png"},
     "Sun Belt": {"color": "#FFA500", "logo": "https://a.espncdn.com/i/teamlogos/ncaa_conf/500/37.png"},
+}
+INDEPENDENT_TEAM_ASSETS = {
+    "notre dame": {"label": "Notre Dame", "color": "#0C2340", "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/87.png"},
+    "notre dame fighting irish": {"label": "Notre Dame", "color": "#0C2340", "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/87.png"},
+    "uconn": {"label": "UConn", "color": "#000E2F", "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/41.png"},
+    "uconn huskies": {"label": "UConn", "color": "#000E2F", "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/41.png"},
+    "connecticut": {"label": "UConn", "color": "#000E2F", "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/41.png"},
+    "connecticut huskies": {"label": "UConn", "color": "#000E2F", "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/41.png"},
 }
 
 PREDICTED_HOME_MARGIN_COLUMNS = [
@@ -344,6 +355,14 @@ def fmt_time(value: object) -> str:
 
 def initials(name: str) -> str:
     return "".join(part[:1] for part in str(name).split()).upper()[:3] or "CFB"
+
+
+def conference_map_asset(team: object, conference: object, conference_assets: dict[str, dict[str, str]]) -> tuple[str, dict[str, str]]:
+    team_asset = INDEPENDENT_TEAM_ASSETS.get(team_key(team))
+    if safe_text(conference) in INDEPENDENT_CONFERENCES and team_asset:
+        return team_asset["label"], team_asset
+    conference_name = safe_text(conference, "Unknown")
+    return conference_name, conference_assets.get(conference_name, {"color": "#64748b", "logo": ""})
 
 
 @st.cache_data(ttl=300)
@@ -859,22 +878,22 @@ def build_county_conquest_map(
         seed_key = str(row.team_key)
         owner_key = owners.get(seed_key, seed_key)
         owner = team_lookup.get(owner_key, team_lookup.get(seed_key, {}))
+        owner_team = safe_text(owner.get("team"), owner_key)
         owner_conference = safe_text(owner.get("conference"), "Unknown")
         if map_mode == "Team":
             display_color = safe_text(owner.get("team_color"), "#64748b") or "#64748b"
             logo = safe_text(owner.get("team_logo_dark"), "") or safe_text(owner.get("team_logo"), "")
-            logo_name = safe_text(owner.get("team"), owner_key)
+            logo_name = owner_team
             logo_key = f"team:{owner_key}"
             logo_radius = TEAM_LOGO_RADIUS
             logo_size = TEAM_LOGO_SIZE
             logo_font_size = TEAM_LOGO_FONT_SIZE
             logo_bubble = False
         else:
-            assets = conference_assets.get(owner_conference, {"color": "#64748b", "logo": ""})
+            logo_name, assets = conference_map_asset(owner_team, owner_conference, conference_assets)
             display_color = assets.get("color", "#64748b")
             logo = assets.get("logo", "")
-            logo_name = owner_conference
-            logo_key = f"conference:{owner_conference}"
+            logo_key = f"conference:{logo_name}"
             logo_radius = CONFERENCE_LOGO_RADIUS
             logo_size = CONFERENCE_LOGO_SIZE
             logo_font_size = CONFERENCE_LOGO_FONT_SIZE
@@ -883,7 +902,7 @@ def build_county_conquest_map(
             {
                 "seedTeam": str(row.team),
                 "seedTeamId": seed_key,
-                "ownerTeam": safe_text(owner.get("team"), str(row.team)),
+                "ownerTeam": owner_team,
                 "ownerTeamId": owner_key,
                 "conference": owner_conference,
                 "lat": float(row.latitude),
@@ -1666,7 +1685,7 @@ scope_col, mode_control_col, map_control_col = st.columns([1.25, 1, 2.35])
 with scope_col:
     map_scope = st.radio(
         "Map Scope",
-        ["Power 5 + Independents", "All FBS"],
+        ["Power 5 + Notre Dame", "G5 + UConn", "All FBS"],
         horizontal=False,
     )
 with mode_control_col:
@@ -1676,18 +1695,22 @@ with mode_control_col:
         horizontal=False,
     )
 
-if map_scope == "Power 5 + Independents":
-    map_conference_filter = POWER_FIVE_MAP_CONFERENCES
-    map_teams = teams[teams["conference"].isin(map_conference_filter)].copy()
+if map_scope == "Power 5 + Notre Dame":
+    map_teams = teams[
+        teams["conference"].isin(POWER_FIVE_CONFERENCES)
+        | teams["team_key"].isin(NOTRE_DAME_TEAM_KEYS)
+    ].copy()
+elif map_scope == "G5 + UConn":
+    map_teams = teams[
+        teams["conference"].isin(G5_CONFERENCES)
+        | teams["team_key"].isin(UCONN_TEAM_KEYS)
+    ].copy()
 else:
-    map_conference_filter = set(conferences)
     map_teams = teams.copy()
 
 map_team_names = set(map_teams["team_key"])
 map_schedule = schedule[
-    schedule["homeconference"].isin(map_conference_filter)
-    & schedule["awayconference"].isin(map_conference_filter)
-    & schedule["hometeam_key"].isin(map_team_names)
+    schedule["hometeam_key"].isin(map_team_names)
     & schedule["awayteam_key"].isin(map_team_names)
 ].copy()
 

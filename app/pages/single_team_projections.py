@@ -31,6 +31,7 @@ SEASON_ODDS_COLUMNS = [
     "playoff_prob",
     "national_champion_prob",
 ]
+GAME_NOTES_COLUMNS = ["notes", "game_notes", "gamenotes", "game_note", "note"]
 
 RANKING_OPTIONS = {
     "AP": {
@@ -52,6 +53,7 @@ RANKING_OPTIONS = {
 }
 
 REGULAR_SEASON_FILTER = "LOWER(COALESCE(seasontype, 'regular')) <> 'postseason'"
+DUPLICATE_VENUE_MARKER_RADIUS = 0.08
 
 
 # ----------------------------
@@ -71,6 +73,28 @@ st.markdown(
 # ----------------------------
 # Small helpers
 # ----------------------------
+def element_key(value: object) -> str:
+    return "_".join(str(value or "").strip().lower().split()) or "unknown"
+
+
+def normalize_id(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    value_str = str(value).strip()
+    if value_str.endswith(".0"):
+        value_str = value_str[:-2]
+    return value_str
+
+
+def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius_miles = 3958.8
+    lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2) ** 2
+    return float(2 * radius_miles * np.arcsin(np.sqrt(a)))
+
+
 def donut(probability: float, team_color: str) -> go.Figure:
     """Probability expected on 0–1 scale."""
     prob = float(np.clip(probability, 0.0, 1.0))
@@ -337,6 +361,61 @@ def get_poll_ranking_history(team: str | None, season: int | None, poll: str) ->
     return df.dropna(subset=["week", "ranking"]).sort_values("week")
 
 
+@st.cache_data(ttl=300)
+def get_previous_postseason_team_sets(season: int) -> dict[str, set[str]]:
+    columns = get_table_columns("game_data")
+    if not {"season", "seasontype", "hometeam", "awayteam"}.issubset(columns):
+        return {"bowl_ids": set(), "bowl_names": set(), "cfp_ids": set(), "cfp_names": set()}
+
+    home_id_sql = "g.homeid::text AS homeid" if "homeid" in columns else "NULL::text AS homeid"
+    away_id_sql = "g.awayid::text AS awayid" if "awayid" in columns else "NULL::text AS awayid"
+    notes_col = next((col for col in GAME_NOTES_COLUMNS if col in columns), None)
+    cfp_sql = (
+        f"LOWER(COALESCE(g.{quote_identifier(notes_col)}, '')) LIKE 'college football playoff%' AS is_cfp"
+        if notes_col
+        else "FALSE AS is_cfp"
+    )
+    df = read_df(
+        f"""
+        SELECT
+            {home_id_sql},
+            {away_id_sql},
+            g.hometeam,
+            g.awayteam,
+            {cfp_sql}
+        FROM public.game_data g
+        WHERE g.season = :season
+          AND LOWER(COALESCE(g.seasontype, 'regular')) = 'postseason'
+          AND g.hometeam IS NOT NULL
+          AND g.awayteam IS NOT NULL
+        """,
+        params={"season": int(season)},
+    )
+    bowl_ids = set()
+    bowl_names = set()
+    cfp_ids = set()
+    cfp_names = set()
+    for row in df.itertuples(index=False):
+        is_cfp = bool(getattr(row, "is_cfp", False))
+        for id_col, team_col in [("homeid", "hometeam"), ("awayid", "awayteam")]:
+            team_id = normalize_id(getattr(row, id_col, ""))
+            team_name = element_key(getattr(row, team_col, ""))
+            if is_cfp:
+                if team_id:
+                    cfp_ids.add(team_id)
+                if team_name:
+                    cfp_names.add(team_name)
+            else:
+                if team_id:
+                    bowl_ids.add(team_id)
+                if team_name:
+                    bowl_names.add(team_name)
+    bowl_ids -= cfp_ids
+    bowl_names -= cfp_names
+    result = {"bowl_ids": bowl_ids, "bowl_names": bowl_names, "cfp_ids": cfp_ids, "cfp_names": cfp_names}
+    return result
+
+
 def get_schedule_map_data(team: str | None, season: int | None) -> pd.DataFrame:
     if not team or season is None:
         return pd.DataFrame()
@@ -437,6 +516,7 @@ def get_schedule_map_data(team: str | None, season: int | None) -> pd.DataFrame:
     df["startdate"] = pd.to_datetime(df["startdate"], utc=True)
     df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
     df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+    df = df.sort_values("startdate").reset_index(drop=True)
     df["game_number"] = range(1, len(df) + 1)
     df["date_label"] = df["startdate"].dt.tz_convert("America/New_York").dt.strftime("%b %-d")
     df["matchup"] = np.where(
@@ -450,6 +530,44 @@ def get_schedule_map_data(team: str | None, season: int | None) -> pd.DataFrame:
         "Scheduled",
     )
     df = df.dropna(subset=["latitude", "longitude"]).copy()
+    postseason_sets = get_previous_postseason_team_sets(int(season) - 1)
+    opponent_ids = df["opponent_id"].map(normalize_id)
+    opponent_names = df["opponent"].map(element_key)
+    df["is_bowl_opponent"] = opponent_ids.isin(postseason_sets["bowl_ids"]) | opponent_names.isin(
+        postseason_sets["bowl_names"]
+    )
+    df["is_cfp_opponent"] = opponent_ids.isin(postseason_sets["cfp_ids"]) | opponent_names.isin(
+        postseason_sets["cfp_names"]
+    )
+    df["travel_leg_miles"] = 0.0
+    home_games = df[df["location_type"].eq("Home")]
+    previous_lat = float(home_games["latitude"].iloc[0]) if not home_games.empty else None
+    previous_lon = float(home_games["longitude"].iloc[0]) if not home_games.empty else None
+    for idx, row in df.iterrows():
+        if previous_lat is not None and previous_lon is not None:
+            df.loc[idx, "travel_leg_miles"] = haversine_miles(
+                previous_lat,
+                previous_lon,
+                float(row["latitude"]),
+                float(row["longitude"]),
+            )
+        previous_lat = float(row["latitude"])
+        previous_lon = float(row["longitude"])
+    df["cumulative_miles"] = df["travel_leg_miles"].cumsum()
+    bowl_seen: set[str] = set()
+    cfp_seen: set[str] = set()
+    bowl_counts = []
+    cfp_counts = []
+    for row in df.itertuples(index=False):
+        opponent_key = normalize_id(getattr(row, "opponent_id", "")) or element_key(getattr(row, "opponent", ""))
+        if getattr(row, "is_bowl_opponent", False):
+            bowl_seen.add(opponent_key)
+        if getattr(row, "is_cfp_opponent", False):
+            cfp_seen.add(opponent_key)
+        bowl_counts.append(len(bowl_seen))
+        cfp_counts.append(len(cfp_seen))
+    df["cumulative_bowl_opponents"] = bowl_counts
+    df["cumulative_cfp_opponents"] = cfp_counts
     df["map_latitude"] = df["latitude"]
     df["map_longitude"] = df["longitude"]
 
@@ -459,7 +577,7 @@ def get_schedule_map_data(team: str | None, season: int | None) -> pd.DataFrame:
     duplicate_mask = duplicate_count > 1
     if duplicate_mask.any():
         angle = 2 * np.pi * duplicate_index[duplicate_mask] / duplicate_count[duplicate_mask]
-        radius = 0.18
+        radius = DUPLICATE_VENUE_MARKER_RADIUS
         df.loc[duplicate_mask, "map_latitude"] = (
             df.loc[duplicate_mask, "latitude"] + radius * np.sin(angle)
         )
@@ -469,7 +587,7 @@ def get_schedule_map_data(team: str | None, season: int | None) -> pd.DataFrame:
     return df
 
 
-def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
+def build_schedule_map(schedule_df: pd.DataFrame, team: str, previous_season: int) -> str:
     if schedule_df.empty:
         return ""
 
@@ -489,6 +607,9 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
                 "result": str(row["result_label"]),
                 "locationType": str(row["location_type"]),
                 "logo": str(logo) if pd.notna(logo) and str(logo).strip() else None,
+                "cumulativeMiles": int(round(float(row.get("cumulative_miles", 0.0)))),
+                "bowlOpponentCount": int(row.get("cumulative_bowl_opponents", 0)),
+                "cfpOpponentCount": int(row.get("cumulative_cfp_opponents", 0)),
             }
         )
 
@@ -533,6 +654,32 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
         }}
         .map-controls input {{ flex: 1; }}
         .game-label {{ min-width: 64px; font-weight: 700; color: #111827; text-align: right; }}
+        .map-stats {{
+          position: absolute;
+          z-index: 1000;
+          top: 8px;
+          right: 12px;
+          min-width: 178px;
+          background: rgba(255, 255, 255, 0.92);
+          border: 1px solid rgba(15, 23, 42, 0.14);
+          border-radius: 8px;
+          padding: 10px 12px;
+          box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+        }}
+        .map-stat-row {{
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 14px;
+          color: #111827;
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1.35;
+        }}
+        .map-stat-row span:last-child {{
+          font-size: 15px;
+          font-weight: 900;
+        }}
         .logo-marker {{
           width: 42px;
           height: 42px;
@@ -572,6 +719,11 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
       <div id="schedule-map-title" class="map-title">{title}</div>
       <div class="map-wrap">
         <div id="schedule-map"></div>
+        <div class="map-stats">
+          <div class="map-stat-row"><span>Miles traveled</span><span id="miles-stat">0</span></div>
+          <div class="map-stat-row"><span>{previous_season} CFP Teams:</span><span id="cfp-stat">0</span></div>
+          <div class="map-stat-row"><span>{previous_season} Bowl Teams:</span><span id="bowl-stat">0</span></div>
+        </div>
         <div class="map-controls">
           <button id="play-btn">Play</button>
           <button id="pause-btn">Pause</button>
@@ -582,14 +734,14 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
       <script>
         const games = {games_json};
         const flyZoom = 6;
-        const millisecondsPerGame = 1800;
+        const millisecondsPerGame = 2100;
         let currentIndex = 0;
         let timer = null;
 
         const map = L.map("schedule-map", {{ zoomControl: true }});
-        L.tileLayer("https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png", {{
+        L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}", {{
           maxZoom: 19,
-          attribution: "&copy; OpenStreetMap contributors &copy; CARTO"
+          attribution: "Tiles &copy; Esri &mdash; Source: Esri, USGS, NOAA"
         }}).addTo(map);
 
         const points = games.map((game) => [game.lat, game.lon]);
@@ -636,6 +788,9 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
         const slider = document.getElementById("game-slider");
         const label = document.getElementById("game-label");
         const title = document.getElementById("schedule-map-title");
+        const milesStat = document.getElementById("miles-stat");
+        const cfpStat = document.getElementById("cfp-stat");
+        const bowlStat = document.getElementById("bowl-stat");
         slider.max = Math.max(games.length - 1, 0);
 
         if (points.length > 1) {{
@@ -658,6 +813,9 @@ def build_schedule_map(schedule_df: pd.DataFrame, team: str) -> str:
           `);
           slider.value = currentIndex;
           label.textContent = `Game ${{game.gameNumber}}`;
+          milesStat.textContent = `${{Number(game.cumulativeMiles || 0).toLocaleString()}} mi`;
+          cfpStat.textContent = game.cfpOpponentCount || 0;
+          bowlStat.textContent = game.bowlOpponentCount || 0;
           title.textContent = `{title} | Game ${{game.gameNumber}}: ${{game.matchup}}`;
 
           if (fly) {{
@@ -704,7 +862,7 @@ def build_win_distribution(season_prediction: pd.Series) -> pd.DataFrame:
     return dist_df
 
 
-def render_odds_donut(title: str, probability: float, team_color: str) -> None:
+def render_odds_donut(title: str, probability: float, team_color: str, key: str) -> None:
     st.markdown(
         f"<div style='text-align:center; font-size:18px; font-weight:600;'>{title}</div>",
         unsafe_allow_html=True,
@@ -713,6 +871,7 @@ def render_odds_donut(title: str, probability: float, team_color: str) -> None:
         donut(probability, team_color),
         use_container_width=True,
         config={"displayModeBar": False},
+        key=key,
     )
 
 
@@ -893,18 +1052,29 @@ if selected_team:
 
     # Bottom: season projection odds
     pie1col, pie2col, pie3col, pie4col = st.columns(4)
+    odds_key_base = f"{current_season}_{element_key(selected_team)}"
 
     with pie1col:
-        render_odds_donut("Bowl Eligibility Odds", bowl_prob, team_hex)
+        render_odds_donut("Bowl Eligibility Odds", bowl_prob, team_hex, f"{odds_key_base}_bowl_odds")
 
     with pie2col:
-        render_odds_donut("Conference Champion Odds", conference_champion_prob, team_hex)
+        render_odds_donut(
+            "Conference Champion Odds",
+            conference_champion_prob,
+            team_hex,
+            f"{odds_key_base}_conference_champion_odds",
+        )
 
     with pie3col:
-        render_odds_donut("CFP Team Odds", playoff_prob, team_hex)
+        render_odds_donut("CFP Team Odds", playoff_prob, team_hex, f"{odds_key_base}_cfp_odds")
 
     with pie4col:
-        render_odds_donut("National Champion Odds", national_champion_prob, team_hex)
+        render_odds_donut(
+            "National Champion Odds",
+            national_champion_prob,
+            team_hex,
+            f"{odds_key_base}_national_champion_odds",
+        )
 
     ranking_left, ranking_right = st.columns(2)
 
@@ -1020,7 +1190,7 @@ if selected_team:
             st.info(f"No mapped schedule venues found for {selected_team} in {current_season}.")
         else:
             components.html(
-                build_schedule_map(schedule_map_df, selected_team),
+                build_schedule_map(schedule_map_df, selected_team, current_season - 1),
                 height=535,
                 scrolling=False,
             )
