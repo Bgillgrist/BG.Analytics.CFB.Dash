@@ -77,6 +77,9 @@ pages = {
         st.Page("pages/team_rankings.py", title="Team Rankings"),
         st.Page("pages/schedule_analysis.py", title="Schedule Analysis"),
     ],
+    "Players": [
+        st.Page("pages/transfer_portal.py", title="Transfer Portal"),
+    ],
 }
 
 logo_path = Path(__file__).parent / "assets" / "logo_color.PNG"
