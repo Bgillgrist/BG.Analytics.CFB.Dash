@@ -48,16 +48,16 @@ POSITION_TO_DETAIL_ORDER = {
     for index, position in enumerate(positions)
 }
 POSITION_IMPACT_WEIGHTS = {
-    "QB": {"top_n": 1, "top_quality": 8.0, "avg_quality": 1.0, "depth": 0.35},
-    "RB": {"top_n": 1, "top_quality": 3.0, "avg_quality": 1.0, "depth": 0.75},
-    "WR": {"top_n": 2, "top_quality": 2.5, "avg_quality": 1.0, "depth": 0.85},
-    "TE": {"top_n": 1, "top_quality": 3.0, "avg_quality": 1.0, "depth": 0.65},
-    "OL": {"top_n": 3, "top_quality": 1.2, "avg_quality": 1.0, "depth": 1.10},
-    "DL": {"top_n": 2, "top_quality": 2.0, "avg_quality": 1.0, "depth": 0.95},
-    "LB": {"top_n": 2, "top_quality": 2.3, "avg_quality": 1.0, "depth": 0.85},
-    "DB": {"top_n": 3, "top_quality": 2.0, "avg_quality": 1.0, "depth": 0.90},
-    "ST": {"top_n": 1, "top_quality": 2.0, "avg_quality": 0.75, "depth": 0.45},
-    "OTHER": {"top_n": 1, "top_quality": 1.0, "avg_quality": 0.5, "depth": 0.60},
+    "QB": {"top_n": 2, "top_quality": 4.0, "avg_quality": 0.0, "depth": 0.0, "depth_cap": 2, "overflow_depth": 0.10},
+    "RB": {"top_n": 1, "top_quality": 10.0, "avg_quality": 2.0, "depth": 0.05, "depth_cap": 3, "overflow_depth": 0.05},
+    "WR": {"top_n": 6, "top_quality": 9.0, "avg_quality": 2.0, "depth": 0.10, "depth_cap": 8, "overflow_depth": 0.15},
+    "TE": {"top_n": 3, "top_quality": 2.0, "avg_quality": 0.25, "depth": 0.10, "depth_cap": 2, "overflow_depth": 0.05},
+    "OL": {"top_n": 2, "top_quality": 0.8, "avg_quality": 0.25, "depth": 2.0, "depth_cap": 10, "overflow_depth": 0.05},
+    "DL": {"top_n": 3, "top_quality": 1.0, "avg_quality": 0.25, "depth": 0.25, "depth_cap": 6, "overflow_depth": 0.05},
+    "LB": {"top_n": 1, "top_quality": 5.0, "avg_quality": 1.5, "depth": 0.25, "depth_cap": 4, "overflow_depth": 0.05},
+    "DB": {"top_n": 3, "top_quality": 10.0, "avg_quality": 1.5, "depth": 0.25, "depth_cap": 6, "overflow_depth": 0.05},
+    "ST": {"top_n": 1, "top_quality": 2.0, "avg_quality": 0.75, "depth": 0.45, "depth_cap": 2, "overflow_depth": 0.10},
+    "OTHER": {"top_n": 1, "top_quality": 1.0, "avg_quality": 0.5, "depth": 0.60, "depth_cap": 3, "overflow_depth": 0.15},
 }
 SIDE_OF_BALL = {
     "QB": "Offense",
@@ -394,6 +394,14 @@ def rating_delta_metric(incoming_rating: float, outgoing_rating: float) -> str:
     return f"{incoming_rating - outgoing_rating:+.2f}"
 
 
+def effective_depth_count(player_count: int, weights: dict[str, float]) -> float:
+    depth_cap = int(weights.get("depth_cap", player_count))
+    overflow_depth = float(weights.get("overflow_depth", 1.0))
+    full_depth_count = min(player_count, depth_cap)
+    overflow_count = max(player_count - depth_cap, 0)
+    return full_depth_count + overflow_count * overflow_depth
+
+
 def position_side_impact(df: pd.DataFrame, position_group_name: str) -> float:
     if df.empty:
         return 0.0
@@ -402,7 +410,7 @@ def position_side_impact(df: pd.DataFrame, position_group_name: str) -> float:
     ratings = df["rating"].dropna().sort_values(ascending=False)
     top_quality = ratings.head(int(weights["top_n"])).mean() if not ratings.empty else 0.0
     avg_quality = ratings.mean() if not ratings.empty else 0.0
-    depth_score = len(df) * float(weights["depth"])
+    depth_score = effective_depth_count(len(df), weights) * float(weights["depth"])
     return (
         depth_score
         + float(weights["top_quality"]) * float(top_quality)
@@ -417,6 +425,43 @@ def total_position_impact(incoming: pd.DataFrame, outgoing: pd.DataFrame) -> flo
         group_outgoing = outgoing[outgoing["position_group"] == group]
         total += position_side_impact(group_incoming, group) - position_side_impact(group_outgoing, group)
     return total
+
+
+def team_portal_impact_table(season_portal: pd.DataFrame, fbs_metadata: pd.DataFrame) -> pd.DataFrame:
+    if season_portal.empty or fbs_metadata.empty:
+        return pd.DataFrame()
+
+    portal_with_keys = season_portal.copy()
+    portal_with_keys["origin_key"] = portal_with_keys["origin"].map(normalize_key)
+    portal_with_keys["destination_key"] = portal_with_keys["destination"].map(normalize_key)
+
+    rows = []
+    teams = fbs_metadata.drop_duplicates("team_key").sort_values("team")
+    for team in teams.itertuples(index=False):
+        team_key = str(team.team_key)
+        incoming_team = portal_with_keys[portal_with_keys["destination_key"] == team_key]
+        outgoing_team = portal_with_keys[portal_with_keys["origin_key"] == team_key]
+        rows.append(
+            {
+                "Team": team.team,
+                "Conference": team.conference,
+                "Incoming": len(incoming_team),
+                "Outgoing": len(outgoing_team),
+                "Net Transfers": len(incoming_team) - len(outgoing_team),
+                "Portal Impact": total_position_impact(incoming_team, outgoing_team),
+            }
+        )
+
+    impact_table = pd.DataFrame(rows)
+    if impact_table.empty:
+        return impact_table
+
+    impact_table = impact_table.sort_values(
+        ["Portal Impact", "Net Transfers", "Incoming", "Team"],
+        ascending=[False, False, False, True],
+    ).reset_index(drop=True)
+    impact_table.insert(0, "Rank", impact_table.index + 1)
+    return impact_table
 
 
 def position_balance_data(incoming: pd.DataFrame, outgoing: pd.DataFrame) -> pd.DataFrame:
@@ -494,7 +539,7 @@ def position_balance_figure(incoming: pd.DataFrame, outgoing: pd.DataFrame, seas
             marker_line=dict(color="rgba(15, 23, 42, 0.12)", width=1),
             customdata=hover_text,
             hovertemplate="%{customdata}<extra></extra>",
-            text=balance["net_change"].map(lambda value: f"{value:+d}"),
+            text=balance["impact_score"].map(lambda value: f"{value:+.2f}"),
             textposition="outside",
             cliponaxis=False,
             showlegend=False,
@@ -727,14 +772,14 @@ def portal_impact_png(
         scale = (chart_right - center_x - 72) / max_impact
 
         draw_text(draw, (76, 322), "POSITION-ADJUSTED NET CHANGE", "#0f172a", font(25, bold=True))
-        draw_text(draw, (982, 324), "NET", "#64748b", font(18, bold=True), anchor="ra")
+        draw_text(draw, (982, 324), "IMPACT", "#64748b", font(18, bold=True), anchor="ra")
         draw.line((center_x, chart_top - 8, center_x, chart_top + row_h * len(balance) - 8), fill="#94a3b8", width=2)
 
         for idx, row in enumerate(balance.itertuples(index=False)):
             y = chart_top + idx * row_h
             y_mid = y + 22
             impact = float(row.impact_score)
-            net_label = f"{int(row.net_change):+d}"
+            impact_label = f"{impact:+.2f}"
             bar_color = "#16a34a" if impact > 0 else "#dc2626" if impact < 0 else "#94a3b8"
             draw_text(draw, (76, y_mid), str(row.position), "#0f172a", font(23, bold=True), anchor="lm")
 
@@ -743,12 +788,12 @@ def portal_impact_png(
             else:
                 x0, x1 = center_x + min(-5, impact * scale), center_x
             draw.rounded_rectangle((int(x0), y + 8, int(x1), y + 37), radius=10, fill=bar_color)
-            draw_text(draw, (982, y_mid), net_label, "#0f172a", font(22, bold=True), anchor="ra")
+            draw_text(draw, (982, y_mid), impact_label, "#0f172a", font(22, bold=True), anchor="ra")
 
         draw_text(
             draw,
             (76, 942),
-            "Bar length reflects position-adjusted portal impact. Net label shows player count change.",
+            "Bar length and end label reflect position-adjusted portal impact.",
             "#64748b",
             font(19),
         )
@@ -1047,3 +1092,20 @@ else:
     if headline_offense.empty and headline_defense.empty:
         st.caption("No rated offensive or defensive transfers found for this date range.")
     st.image(news_png, use_container_width=True)
+
+st.divider()
+st.subheader("Team Portal Impact Rankings")
+impact_table = team_portal_impact_table(season_portal, fbs_metadata)
+if impact_table.empty:
+    st.caption("No team portal impact data is available for this season.")
+else:
+    st.dataframe(
+        impact_table,
+        use_container_width=True,
+        hide_index=True,
+        height=560,
+        column_config={
+            "Portal Impact": st.column_config.NumberColumn("Portal Impact", format="%.2f"),
+            "Net Transfers": st.column_config.NumberColumn("Net Transfers", format="%+d"),
+        },
+    )
