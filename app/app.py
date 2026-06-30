@@ -72,7 +72,7 @@ pages = {
         st.Page("pages/single_team_projections.py", title="Projections"),
         st.Page("pages/single_team_season_report_card.py", title="Season Report Card"),
         st.Page("pages/single_team_game_report_card.py", title="Game Report Card"),
-        st.Page("pages/state_of_the_team.py", title="State of the Team"),
+        st.Page("pages/preseason_outlook.py", title="Preseason Outlook"),
     ],
     "League Wide": [
         st.Page("pages/team_rankings.py", title="Team Rankings"),

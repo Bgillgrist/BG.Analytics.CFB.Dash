@@ -931,17 +931,6 @@ def top_transfers(df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
     )
 
 
-def portal_balance(incoming: pd.DataFrame, outgoing: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for group, order in POSITION_GROUP_ORDER.items():
-        in_group = incoming[incoming["position_group"] == group]
-        out_group = outgoing[outgoing["position_group"] == group]
-        impact = position_side_impact(in_group, group) - position_side_impact(out_group, group)
-        if len(in_group) or len(out_group):
-            rows.append({"position": group, "order": order, "net": len(in_group) - len(out_group), "impact": impact})
-    return pd.DataFrame(rows).sort_values("order") if rows else pd.DataFrame()
-
-
 def portal_impact_rank_context(team: str, season_portal: pd.DataFrame) -> tuple[str, str]:
     fbs_metadata = load_fbs_team_metadata()
     if season_portal.empty or fbs_metadata.empty:
@@ -987,6 +976,34 @@ def portal_impact_rank_context(team: str, season_portal: pd.DataFrame) -> tuple[
         return national_label, "N/A"
     conference_label = f"#{int(conference_selected['conference_rank'].iloc[0])}/{len(conference_rows)}"
     return national_label, conference_label
+
+
+def conference_lookup_map() -> dict[str, str]:
+    fbs_metadata = load_fbs_team_metadata()
+    if fbs_metadata.empty:
+        return {}
+    rows = fbs_metadata.drop_duplicates("team_key")
+    return {
+        str(row.team_key): safe_text(row.conference, "Uncommitted")
+        for row in rows.itertuples(index=False)
+        if safe_text(row.team_key)
+    }
+
+
+def transfer_conference_counts(df: pd.DataFrame, team_column: str, limit: int = 3) -> pd.DataFrame:
+    if df.empty or team_column not in df.columns:
+        return pd.DataFrame(columns=["conference", "count"])
+    lookup = conference_lookup_map()
+    conferences = df[team_column].map(lambda team: lookup.get(normalize_key(team), "Uncommitted"))
+    counts = (
+        conferences.value_counts(dropna=False)
+        .rename_axis("conference")
+        .reset_index(name="count")
+        .sort_values(["count", "conference"], ascending=[False, True])
+        .head(limit)
+        .reset_index(drop=True)
+    )
+    return counts
 
 
 @st.cache_data(ttl=300)
@@ -1121,6 +1138,7 @@ def draw_stat_card(
     label_size: int = 19,
     value_size: int = 39,
     sublabel_size: int = 18,
+    sublabel_y_offset: int = 0,
 ) -> None:
     x0, y0, x1, y1 = box
     draw.rounded_rectangle(box, radius=22, fill="#ffffff", outline="#dbe4ee", width=2)
@@ -1128,7 +1146,7 @@ def draw_stat_card(
     draw_text(draw, (x0 + 30, y0 + 22), fit_text(draw, label.upper(), font(label_size, bold=True), x1 - x0 - 54), "#64748b", font(label_size, bold=True))
     draw_text(draw, (x0 + 30, y0 + 58), fit_text(draw, value, font(value_size, bold=True), x1 - x0 - 54), "#0f172a", font(value_size, bold=True))
     if sublabel:
-        draw_text(draw, (x0 + 30, y1 - 38), fit_text(draw, sublabel, font(sublabel_size), x1 - x0 - 54), "#64748b", font(sublabel_size))
+        draw_text(draw, (x0 + 30, y1 - 38 + sublabel_y_offset), fit_text(draw, sublabel, font(sublabel_size), x1 - x0 - 54), "#64748b", font(sublabel_size))
 
 
 def draw_grade_badge(
@@ -1148,7 +1166,7 @@ def draw_grade_badge(
         if pct is not None:
             # Tweak these two y-offsets if you want to fine-tune the percentile text placement.
             pct_value_y = y + 68
-            pct_label_y = y + 116
+            pct_label_y = y + 130
             pct_int = display_percentile(pct)
             draw_text(draw, (x + 30, pct_value_y), ordinal(pct_int), "#0f172a", font(48, bold=True))
             draw_text(draw, (x + 30, pct_label_y), "FBS percentile", "#64748b", font(20))
@@ -1362,22 +1380,38 @@ def draw_rank_pill(
     draw_text(draw, (x1 - 26, mid_y), fit_text(draw, value, font(21, bold=True), 128), "#0f172a", font(21, bold=True), "rm")
 
 
-def draw_position_swing_chip(
+def draw_conference_flow_column(
     draw: ImageDraw.ImageDraw,
+    title: str,
+    counts: pd.DataFrame,
     box: tuple[int, int, int, int],
-    position: object,
-    net: int,
-    impact: float,
-    fill: str,
-    outline: str,
     accent: str,
 ) -> None:
     x0, y0, x1, y1 = box
-    cx = (x0 + x1) // 2
-    draw.rounded_rectangle(box, radius=18, fill=fill, outline=outline, width=1)
-    draw_text(draw, (cx - 34, y0 + 27), safe_text(position), "#0f172a", font(25, bold=True), "mm")
-    draw_text(draw, (cx + 42, y0 + 27), f"{int(net):+d}", accent, font(23, bold=True), "mm")
-    draw_text(draw, (cx, y0 + 56), f"Impact {impact:+.1f}", accent, font(20, bold=True), "mm")
+    draw_text(draw, ((x0 + x1) // 2, y0), title.upper(), accent, font(19, bold=True), "mm")
+    if counts.empty:
+        draw_text(draw, ((x0 + x1) // 2, y0 + 52), "No conference data", "#94a3b8", font(20, bold=True), "mm")
+        return
+
+    max_count = max(int(counts["count"].max()), 1)
+    row_h = 22
+    gap = 5
+    start_y = y0 + 24
+    label_w = 190
+    count_w = 44
+    bar_x0 = x0 + label_w
+    bar_x1 = x1 - count_w - 8
+    bar_max_w = max(bar_x1 - bar_x0, 24)
+
+    for idx, row in enumerate(counts.itertuples(index=False), start=1):
+        y = start_y + (idx - 1) * (row_h + gap)
+        conference = safe_text(row.conference, "Uncommitted")
+        count = int(row.count)
+        draw_text(draw, (x0, y + row_h // 2), fit_text(draw, conference, font(17, bold=True), label_w - 10), "#0f172a", font(17, bold=True), "lm")
+        draw.rounded_rectangle((bar_x0, y + 5, bar_x0 + bar_max_w, y + row_h - 5), radius=6, fill="#e2e8f0")
+        bar_w = max(8, int(bar_max_w * count / max_count))
+        draw.rounded_rectangle((bar_x0, y + 5, bar_x0 + bar_w, y + row_h - 5), radius=6, fill=accent)
+        draw_text(draw, (x1, y + row_h // 2), str(count), "#0f172a", font(19, bold=True), "rm")
 
 
 def results_slide(team: str, meta: pd.Series, season: int, outlook_season: int) -> bytes:
@@ -1467,8 +1501,9 @@ def transfer_slide(team: str, meta: pd.Series, portal_season: int, portal: pd.Da
     top_in = top_transfers(incoming)
     top_out = top_transfers(outgoing)
     impact = total_position_impact(incoming, outgoing) if not incoming.empty or not outgoing.empty else 0.0
-    balance = portal_balance(incoming, outgoing)
     national_rank, conference_rank = portal_impact_rank_context(team, season_portal)
+    incoming_conferences = transfer_conference_counts(incoming, "origin")
+    outgoing_conferences = transfer_conference_counts(outgoing, "destination")
 
     impact_color = "#16a34a" if impact > 0 else "#dc2626" if impact < 0 else "#64748b"
     draw.rounded_rectangle((58, 382, 1022, 535), radius=30, fill="#ffffff", outline="#dbe4ee", width=2)
@@ -1510,30 +1545,21 @@ def transfer_slide(team: str, meta: pd.Series, portal_season: int, portal: pd.Da
             draw_text(draw, (613, y + 17), "No rated loss", "#94a3b8", font(20, bold=True))
 
     draw.rounded_rectangle((58, 1052, 1022, 1226), radius=24, fill="#ffffff", outline="#dbe4ee", width=2)
-    draw_text(draw, (390, 1080), "POSITION IMPACT CHANGES", "#64748b", font(21, bold=True))
-    if not balance.empty:
-        gained = balance[balance["impact"] > 0].sort_values("impact", ascending=False).head(2)
-        lost = balance[balance["impact"] < 0].sort_values("impact", ascending=True).head(2)
-        draw_text(draw, (292, 1117), "BIGGEST GAINS", "#16a34a", font(20, bold=True), "mm")
-        draw_text(draw, (788, 1117), "BIGGEST LOSSES", "#dc2626", font(20, bold=True), "mm")
-        for idx, row in enumerate(gained.itertuples(index=False)):
-            x = 84 + idx * 220
-            draw_position_swing_chip(draw, (x, 1140, x + 204, 1208), row.position, int(row.net), float(row.impact), "#ecfdf5", "#bbf7d0", "#16a34a")
-        for idx, row in enumerate(lost.itertuples(index=False)):
-            x = 580 + idx * 220
-            draw_position_swing_chip(draw, (x, 1140, x + 204, 1208), row.position, int(row.net), float(row.impact), "#fef2f2", "#fecaca", "#dc2626")
-        if gained.empty:
-            draw_text(draw, (292, 1172), "No positive position impact", "#94a3b8", font(20, bold=True), "mm")
-        if lost.empty:
-            draw_text(draw, (788, 1172), "No negative position impact", "#94a3b8", font(20, bold=True), "mm")
-    else:
-        draw_text(draw, (540, 1142), "No transfer movement found for this season.", "#64748b", font(23, bold=True), "mm")
+    draw_text(draw, (540, 1080), "CONFERENCE TRANSFER PIPELINE", "#64748b", font(21, bold=True), "mm")
+    draw_conference_flow_column(draw, "Incoming From", incoming_conferences, (86, 1116, 492, 1210), "#16a34a")
+    draw_conference_flow_column(draw, "Outgoing To", outgoing_conferences, (588, 1116, 994, 1210), "#dc2626")
 
     return png_bytes(canvas)
 
 
 def schedule_slide(team: str, meta: pd.Series, schedule_season: int, context_season: int) -> bytes:
-    canvas, draw, team_color, _, soft_color = begin_slide(team, meta, "Schedule Analysis", f"{schedule_season} Schedule Shape")
+    canvas, draw, team_color, _, soft_color = begin_slide(
+        team,
+        meta,
+        f"{schedule_season} Preseason Outlook",
+        f"{schedule_season} Upcoming Schedule",
+        team_first_header=True,
+    )
     schedule = load_schedule(team, schedule_season)
     if schedule.empty:
         draw_text(draw, (72, 450), "No schedule found for this team/season.", "#0f172a", font(36, bold=True))
@@ -1575,7 +1601,15 @@ def schedule_slide(team: str, meta: pd.Series, schedule_season: int, context_sea
     draw_stat_card(draw, (58, 382, 294, 510), "Home", str(home_count), team_color)
     draw_stat_card(draw, (316, 382, 552, 510), "Away", str(away_count), team_color)
     draw_stat_card(draw, (574, 382, 810, 510), "Neutral", str(neutral_count), team_color)
-    draw_stat_card(draw, (832, 382, 1022, 510), f"{context_season} AP", str(ranked_count), team_color, "ranked foes")
+    draw_stat_card(
+        draw,
+        (832, 382, 1022, 510),
+        f"{context_season} AP",
+        str(ranked_count),
+        team_color,
+        "ranked opp.",
+        sublabel_y_offset=8,
+    )
 
     draw.rounded_rectangle((58, 554, 1022, 1162), radius=28, fill="#ffffff", outline="#dbe4ee", width=2)
     draw_text(draw, (86, 584), "OPPONENT SNAPSHOT", "#0f172a", font(27, bold=True))
@@ -1613,6 +1647,9 @@ def schedule_slide(team: str, meta: pd.Series, schedule_season: int, context_sea
     if len(opponent_rows) > max_rows:
         draw_text(draw, (86, 1130), f"+ {len(opponent_rows) - max_rows} more games not shown", "#64748b", font(18, bold=True))
 
+    question = f"What will be {team}'s record in {schedule_season}?"
+    draw_text(draw, (540, 1236), fit_text(draw, question, font(31, bold=True), 900), "#0f172a", font(31, bold=True), "mm")
+
     return png_bytes(canvas)
 
 
@@ -1628,11 +1665,7 @@ def season_index(options: list[int], preferred: int) -> int:
     return options.index(preferred) if preferred in options else 0
 
 
-st.markdown('<div class="sott-title">State of the Team</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="sott-subtitle">Preseason social-slide mockups: results, transfer movement, and schedule shape.</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="sott-title">Preseason Outlook</div>', unsafe_allow_html=True)
 
 fbs_metadata = load_fbs_team_metadata()
 if fbs_metadata.empty:
