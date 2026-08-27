@@ -119,6 +119,10 @@ def first_existing(columns: set[str], candidates: list[str]) -> str | None:
     return next((lower_lookup[candidate.lower()] for candidate in candidates if candidate.lower() in lower_lookup), None)
 
 
+def is_withdrawn_eligibility(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip().str.lower().eq("withdrawn")
+
+
 @st.cache_data(ttl=300)
 def get_table_columns(table_name: str) -> set[str]:
     try:
@@ -196,6 +200,7 @@ def load_transfer_portal() -> pd.DataFrame:
     df["position_group"] = df["position"].map(position_group)
     df["position_group_order"] = df["position_group"].map(POSITION_GROUP_ORDER).fillna(POSITION_GROUP_ORDER["OTHER"])
     df["position_detail_order"] = df["position"].map(POSITION_TO_DETAIL_ORDER).fillna(99)
+    df = df[~is_withdrawn_eligibility(df["eligibility"])].copy()
     return df
 
 

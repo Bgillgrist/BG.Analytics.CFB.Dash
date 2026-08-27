@@ -86,6 +86,14 @@ def normalize_id(value: object) -> str:
     return value_str
 
 
+def truthy(value: object) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "t", "1", "yes", "y"}
+
+
 def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     radius_miles = 3958.8
     lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(np.radians, [lat1, lon1, lat2, lon2])
@@ -911,18 +919,34 @@ def style_win_probability_table(df: pd.DataFrame):
 # ----------------------------
 # Data for dropdown
 # ----------------------------
-game_data = read_df(
+fbs_team_data = read_df(
     f"""
-    SELECT *
-    FROM public.game_data
-    WHERE startdate IS NOT NULL
-      AND homeclassification = 'fbs'
-      AND awayclassification = 'fbs'
-      AND {REGULAR_SEASON_FILTER}
+    WITH fbs_team_rows AS (
+        SELECT season, hometeam AS team
+        FROM public.game_data
+        WHERE startdate IS NOT NULL
+          AND homeclassification = 'fbs'
+          AND {REGULAR_SEASON_FILTER}
+
+        UNION ALL
+
+        SELECT season, awayteam AS team
+        FROM public.game_data
+        WHERE startdate IS NOT NULL
+          AND awayclassification = 'fbs'
+          AND {REGULAR_SEASON_FILTER}
+    )
+    SELECT DISTINCT season, team
+    FROM fbs_team_rows
+    WHERE team IS NOT NULL
     """
 )
-current_season = int(game_data["season"].max())
-teams = sorted(pd.concat([game_data["hometeam"], game_data["awayteam"]]).dropna().unique())
+current_season = int(fbs_team_data["season"].max())
+teams = sorted(
+    fbs_team_data.loc[fbs_team_data["season"] == current_season, "team"]
+    .dropna()
+    .unique()
+)
 
 
 # ----------------------------
@@ -979,8 +1003,6 @@ if selected_team:
         WHERE g.season = :season
           AND g.startdate IS NOT NULL
           AND (g.hometeam = :team OR g.awayteam = :team)
-          AND g.homeclassification = 'fbs'
-          AND g.awayclassification = 'fbs'
           AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
         """,
         params={"team": selected_team, "season": current_season},
@@ -1011,10 +1033,21 @@ if selected_team:
     with left_col:
         st.subheader(f"Upcoming Games for {selected_team}")
         upcoming_start_et = upcoming_games["startdate"].dt.tz_convert("America/New_York")
+        time_display = upcoming_start_et.dt.strftime("%-I:%M %p")
+        start_time_tbd_col = next(
+            (
+                col
+                for col in ["startTimeTBD", "starttimetbd", "start_time_tbd", "StartTimeTBD"]
+                if col in upcoming_games.columns
+            ),
+            None,
+        )
+        if start_time_tbd_col:
+            time_display = time_display.mask(upcoming_games[start_time_tbd_col].map(truthy), "TBD")
         upcoming_display = (
             upcoming_games.assign(
                 Date=upcoming_start_et.dt.strftime("%m/%d/%Y"),
-                Time=upcoming_start_et.dt.strftime("%-I:%M %p"),
+                Time=time_display,
                 win_probability=pd.to_numeric(upcoming_games["teamwinprob"], errors="coerce"),
             )[
                 ["Date", "Time", "hometeam", "awayteam", "win_probability", "model_version"]

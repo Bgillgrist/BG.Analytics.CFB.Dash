@@ -148,6 +148,10 @@ def first_existing(columns: set[str], candidates: list[str]) -> str | None:
     return next((lower_lookup[candidate.lower()] for candidate in candidates if candidate.lower() in lower_lookup), None)
 
 
+def is_withdrawn_eligibility(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip().str.lower().eq("withdrawn")
+
+
 def valid_hex_color(value: object) -> str:
     value_str = str(value or "").strip()
     if not value_str:
@@ -687,6 +691,25 @@ def postseason_results(team: str, games: pd.DataFrame) -> list[str]:
 @st.cache_data(ttl=300)
 def final_ap_rankings(season: int) -> pd.DataFrame:
     try:
+        columns = get_table_columns("rankings")
+        season_type_column = first_existing(columns, ["season_type", "seasontype", "seasonType"])
+        if season_type_column:
+            season_type_identifier = quote_identifier(season_type_column)
+            postseason_df = read_df(
+                f"""
+                SELECT school AS team, rank::int AS rank
+                FROM public.rankings
+                WHERE season = :season
+                  AND poll = 'AP Top 25'
+                  AND week = 1
+                  AND LOWER(COALESCE({season_type_identifier}, '')) = 'postseason'
+                ORDER BY rank
+                """,
+                params={"season": int(season)},
+            )
+            if not postseason_df.empty:
+                return postseason_df
+
         weeks = read_df(
             """
             SELECT MAX(week)::int AS week
@@ -891,6 +914,7 @@ def load_transfer_portal() -> pd.DataFrame:
     df["transfer_date"] = pd.to_datetime(df["transfer_date"], errors="coerce")
     df["eligibility"] = df["eligibility"].fillna("").astype(str).str.strip()
     df["position_group"] = df["position"].map(position_group)
+    df = df[~is_withdrawn_eligibility(df["eligibility"])].copy()
     return df
 
 
@@ -929,6 +953,13 @@ def top_transfers(df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
         .head(limit)
         .reset_index(drop=True)
     )
+
+
+def committed_destination_transfers(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "destination" not in df.columns:
+        return df
+    destination = df["destination"].fillna("").astype(str).str.strip()
+    return df[destination.astype(bool) & destination.str.lower().ne("uncommitted")].copy()
 
 
 def portal_impact_rank_context(team: str, season_portal: pd.DataFrame) -> tuple[str, str]:
@@ -1499,7 +1530,7 @@ def transfer_slide(team: str, meta: pd.Series, portal_season: int, portal: pd.Da
     incoming = season_portal[season_portal["destination"].map(normalize_key) == team_key].copy() if not season_portal.empty else pd.DataFrame()
     outgoing = season_portal[season_portal["origin"].map(normalize_key) == team_key].copy() if not season_portal.empty else pd.DataFrame()
     top_in = top_transfers(incoming)
-    top_out = top_transfers(outgoing)
+    top_out = top_transfers(committed_destination_transfers(outgoing))
     impact = total_position_impact(incoming, outgoing) if not incoming.empty or not outgoing.empty else 0.0
     national_rank, conference_rank = portal_impact_rank_context(team, season_portal)
     incoming_conferences = transfer_conference_counts(incoming, "origin")

@@ -343,8 +343,8 @@ def projected_winner_label(row: pd.Series) -> str:
     if home_probability is None:
         return ""
     if home_probability >= 0.5:
-        return f"{safe_text(row.get('hometeam'))}: {home_probability:.0%}"
-    return f"{safe_text(row.get('awayteam'))}: {1 - home_probability:.0%}"
+        return f"{safe_text(row.get('hometeam'))}: {home_probability:.1%}"
+    return f"{safe_text(row.get('awayteam'))}: {1 - home_probability:.1%}"
 
 
 def fmt_time(value: object) -> str:
