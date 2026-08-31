@@ -11,8 +11,8 @@ from utils.db import read_df
 
 ET_TZ = "America/New_York"
 FBS_FILTER = "homeclassification = 'fbs' AND awayclassification = 'fbs'"
-POWER_FIVE_CONFERENCES = {"SEC", "ACC", "Big Ten", "Big 10", "Big 12", "Pac-12", "Pac 12"}
-G5_CONFERENCES = {"American Athletic", "Conference USA", "Mid-American", "Mountain West", "Sun Belt"}
+POWER_FOUR_CONFERENCES = {"SEC", "ACC", "Big Ten", "Big 10", "Big 12"}
+G6_CONFERENCES = {"American Athletic", "Conference USA", "Mid-American", "Mountain West", "Pac-12", "Pac 12", "Sun Belt"}
 INDEPENDENT_CONFERENCES = {"FBS Independents", "Independent", "Independents"}
 NOTRE_DAME_TEAM_KEYS = {"notre dame", "notre dame fighting irish"}
 UCONN_TEAM_KEYS = {"uconn", "connecticut", "uconn huskies", "connecticut huskies"}
@@ -95,6 +95,16 @@ AWAY_WIN_PROBABILITY_COLUMNS = [
     "away_wp",
 ]
 EXCITEMENT_COLUMNS = ["excitement_index", "excitement index", "excitementindex", "excitement"]
+LINE_TYPE_COLUMNS = [
+    "line_type",
+    "linetype",
+    "line type",
+    "LineType",
+    "Line Type",
+    "lineType",
+    "line_type_label",
+    "spread_line_type",
+]
 WIN_PROBABILITY_SPREAD_SCALE = 14.0
 TEAM_ASSET_COLUMNS = [
     "team_id",
@@ -347,6 +357,15 @@ def projected_winner_label(row: pd.Series) -> str:
     return f"{safe_text(row.get('awayteam'))}: {1 - home_probability:.1%}"
 
 
+def fmt_line_type(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    normalized = str(value).strip()
+    if not normalized:
+        return ""
+    return normalized.replace("_", " ").title()
+
+
 def fmt_time(value: object) -> str:
     if value is None or pd.isna(value):
         return ""
@@ -413,6 +432,75 @@ def prediction_column_sql(prediction_columns: set[str], candidates: list[str]) -
     return "NULL::float"
 
 
+def prediction_text_column_sql(prediction_columns: set[str], candidates: list[str]) -> str:
+    for col in candidates:
+        if col in prediction_columns:
+            return f"p.{quote_identifier(col)}::text"
+    return "NULL::text"
+
+
+def prediction_table_sql(table_name: str) -> str:
+    return f"public.{quote_identifier(table_name)}"
+
+
+def get_prediction_source() -> tuple[str, set[str]]:
+    prediction_columns = get_table_columns("game_predictions_full")
+    if "gameid" in prediction_columns:
+        return "game_predictions_full", prediction_columns
+    return "game_predictions", get_table_columns("game_predictions")
+
+
+def prediction_row_order_sql(prediction_columns: set[str]) -> str:
+    order_columns = [
+        col
+        for col in ["updated_at", "created_at", "game_prediction_id", "id"]
+        if col in prediction_columns and col != "gameid"
+    ]
+    if not order_columns:
+        return ""
+    return ", " + ", ".join(f"p.{quote_identifier(col)} DESC NULLS LAST" for col in order_columns)
+
+
+def latest_prediction_ctes(table_name: str, run_columns: set[str], prediction_columns: set[str]) -> str:
+    status_filter = (
+        "AND LOWER(COALESCE(r.status, 'success')) IN ('success', 'succeeded', 'complete', 'completed')"
+        if "status" in run_columns
+        else ""
+    )
+    order_columns = [
+        col
+        for col in ["completed_at", "created_at", "game_prediction_run_id"]
+        if col in run_columns
+    ]
+    order_sql = ", ".join(f"r.{quote_identifier(col)} DESC NULLS LAST" for col in order_columns)
+    if not order_sql:
+        order_sql = "r.game_prediction_run_id DESC"
+
+    return f"""
+        WITH latest_run AS (
+            SELECT r.game_prediction_run_id
+            FROM public.game_prediction_runs r
+            WHERE r.season = :season
+              {status_filter}
+              AND EXISTS (
+                  SELECT 1
+                  FROM {prediction_table_sql(table_name)} p
+                  WHERE p.game_prediction_run_id = r.game_prediction_run_id
+              )
+            ORDER BY {order_sql}
+            LIMIT 1
+        ),
+        latest_predictions AS (
+            SELECT DISTINCT ON (p.gameid)
+                p.*
+            FROM {prediction_table_sql(table_name)} p
+            JOIN latest_run lr
+              ON p.game_prediction_run_id = lr.game_prediction_run_id
+            ORDER BY p.gameid{prediction_row_order_sql(prediction_columns)}
+        )
+    """
+
+
 @st.cache_data(ttl=300)
 def get_schedule_games(season: int) -> pd.DataFrame:
     df = read_df(
@@ -474,7 +562,7 @@ def get_schedule_games(season: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def get_prediction_data(season: int) -> pd.DataFrame:
-    prediction_columns = get_table_columns("game_predictions_full")
+    prediction_table, prediction_columns = get_prediction_source()
     run_columns = get_table_columns("game_prediction_runs")
     if "gameid" not in prediction_columns:
         return pd.DataFrame()
@@ -483,32 +571,28 @@ def get_prediction_data(season: int) -> pd.DataFrame:
         "p.gameid::text AS game_id",
         f"{prediction_column_sql(prediction_columns, HOME_WIN_PROBABILITY_COLUMNS)} AS homewinprob",
         f"{prediction_column_sql(prediction_columns, AWAY_WIN_PROBABILITY_COLUMNS)} AS awaywinprob",
+        f"{prediction_text_column_sql(prediction_columns, LINE_TYPE_COLUMNS)} AS line_type",
     ]
     if "model_version" in prediction_columns:
         select_parts.append("p.model_version AS model_version")
     margin_sql = prediction_margin_sql(prediction_columns)
     select_parts.append(f"{margin_sql} AS predicted_home_margin")
 
-    if "game_prediction_run_id" in prediction_columns and {"season", "status", "game_prediction_run_id"}.issubset(run_columns):
-        order_col = "created_at" if "created_at" in run_columns else "game_prediction_run_id"
+    if "game_prediction_run_id" in prediction_columns and {"season", "game_prediction_run_id"}.issubset(run_columns):
         sql = f"""
-        SELECT DISTINCT ON (p.gameid)
+        {latest_prediction_ctes(prediction_table, run_columns, prediction_columns)}
+        SELECT
             {", ".join(select_parts)}
-        FROM public.game_predictions_full p
-        JOIN public.game_prediction_runs r
-          ON p.game_prediction_run_id = r.game_prediction_run_id
+        FROM latest_predictions p
         JOIN public.game_data g
           ON p.gameid = g.id::text
-        WHERE r.season = :season
-          AND g.season = :season
-          AND r.status = 'success'
-        ORDER BY p.gameid, r.{quote_identifier(order_col)} DESC
+        WHERE g.season = :season
         """
         df = read_df(sql, {"season": int(season)})
     else:
         sql = f"""
         SELECT {", ".join(select_parts)}
-        FROM public.game_predictions_full p
+        FROM {prediction_table_sql(prediction_table)} p
         JOIN public.game_data g
           ON p.gameid = g.id::text
         WHERE g.season = :season
@@ -631,9 +715,15 @@ def attach_predictions(schedule: pd.DataFrame, predictions: pd.DataFrame) -> pd.
         schedule = schedule.copy()
         schedule["home_win_probability"] = np.nan
         schedule["predicted_home_margin"] = np.nan
+        schedule["line_type"] = ""
         return schedule
 
-    df = schedule.merge(predictions, on="game_id", how="left")
+    df = schedule.merge(predictions, on="game_id", how="left", suffixes=("", "_prediction"))
+    if "line_type_prediction" in df.columns:
+        existing_line_type = df["line_type"] if "line_type" in df.columns else pd.Series("", index=df.index)
+        df["line_type"] = df["line_type_prediction"].combine_first(existing_line_type)
+        df = df.drop(columns=["line_type_prediction"])
+
     home_probability = (
         pd.to_numeric(df["homewinprob"].map(normalize_probability), errors="coerce")
         if "homewinprob" in df.columns
@@ -646,6 +736,8 @@ def attach_predictions(schedule: pd.DataFrame, predictions: pd.DataFrame) -> pd.
     )
     df["home_win_probability"] = home_probability.combine_first(1 - away_probability)
     df["predicted_home_margin"] = pd.to_numeric(df.get("predicted_home_margin"), errors="coerce")
+    if "line_type" not in df.columns:
+        df["line_type"] = ""
     return df
 
 
@@ -659,6 +751,7 @@ def weekly_table(schedule: pd.DataFrame, week_label: str, conferences: list[str]
             "Kickoff": df["startdate"].map(fmt_time),
             "Matchup": df["matchup"],
             "Projected Winner": df.apply(projected_winner_label, axis=1),
+            "Line Type": df["line_type"].map(fmt_line_type) if "line_type" in df.columns else "",
             "Score": np.where(
                 df["completed"],
                 df["awaypoints"].astype("Int64").astype(str) + "-" + df["homepoints"].astype("Int64").astype(str),
@@ -1685,7 +1778,7 @@ scope_col, mode_control_col, map_control_col = st.columns([1.25, 1, 2.35])
 with scope_col:
     map_scope = st.radio(
         "Map Scope",
-        ["Power 5 + Notre Dame", "G5 + UConn", "All FBS"],
+        ["Power 4 + Notre Dame", "G6 + UConn"],
         horizontal=False,
     )
 with mode_control_col:
@@ -1695,18 +1788,16 @@ with mode_control_col:
         horizontal=False,
     )
 
-if map_scope == "Power 5 + Notre Dame":
+if map_scope == "Power 4 + Notre Dame":
     map_teams = teams[
-        teams["conference"].isin(POWER_FIVE_CONFERENCES)
+        teams["conference"].isin(POWER_FOUR_CONFERENCES)
         | teams["team_key"].isin(NOTRE_DAME_TEAM_KEYS)
     ].copy()
-elif map_scope == "G5 + UConn":
+else:
     map_teams = teams[
-        teams["conference"].isin(G5_CONFERENCES)
+        teams["conference"].isin(G6_CONFERENCES)
         | teams["team_key"].isin(UCONN_TEAM_KEYS)
     ].copy()
-else:
-    map_teams = teams.copy()
 
 map_team_names = set(map_teams["team_key"])
 map_schedule = schedule[

@@ -43,6 +43,24 @@ GENERIC_SPREAD_COLUMNS = [
     "spread",
 ]
 
+HOME_WIN_PROBABILITY_COLUMNS = [
+    "homewinprob",
+    "home_win_probability",
+    "home_win_prob",
+    "homewinprobability",
+    "home_win_pct",
+    "home_wp",
+]
+
+AWAY_WIN_PROBABILITY_COLUMNS = [
+    "awaywinprob",
+    "away_win_probability",
+    "away_win_prob",
+    "awaywinprobability",
+    "away_win_pct",
+    "away_wp",
+]
+
 WIN_PROBABILITY_SPREAD_SCALE = 14.0
 COMPLETED_GAME_WEIGHT = 1.0
 PROJECTED_GAME_WEIGHT = 0.45
@@ -316,6 +334,10 @@ def quote_identifier(identifier: str) -> str:
     return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
 
 
+def first_existing(columns: set[str], candidates: list[str]) -> str | None:
+    return next((col for col in candidates if col in columns), None)
+
+
 @st.cache_data(ttl=300)
 def get_table_columns(table_name: str) -> set[str]:
     df = read_df(
@@ -530,38 +552,105 @@ def get_prediction_margin_select(prediction_columns: set[str]) -> tuple[str, str
         if col in prediction_columns:
             return f"(-1 * p.{quote_identifier(col)}::float)", col
 
-    if "homewinprob" in prediction_columns:
+    if first_existing(prediction_columns, HOME_WIN_PROBABILITY_COLUMNS):
         return "NULL::float", "winprob"
 
-    if "awaywinprob" in prediction_columns:
+    if first_existing(prediction_columns, AWAY_WIN_PROBABILITY_COLUMNS):
         return "NULL::float", "winprob"
 
     return "NULL::float", "none"
 
 
+def probability_sql(column: str) -> str:
+    value_sql = f"p.{quote_identifier(column)}::float"
+    return f"(CASE WHEN {value_sql} > 1 THEN {value_sql} / 100.0 ELSE {value_sql} END)"
+
+
+def prediction_table_sql(table_name: str) -> str:
+    return f"public.{quote_identifier(table_name)}"
+
+
+def get_prediction_source() -> tuple[str, set[str]]:
+    prediction_columns = get_table_columns("game_predictions_full")
+    if "gameid" in prediction_columns:
+        return "game_predictions_full", prediction_columns
+    return "game_predictions", get_table_columns("game_predictions")
+
+
+def prediction_row_order_sql(prediction_columns: set[str]) -> str:
+    order_columns = [
+        col
+        for col in ["updated_at", "created_at", "game_prediction_id", "id"]
+        if col in prediction_columns and col != "gameid"
+    ]
+    if not order_columns:
+        return ""
+    return ", " + ", ".join(f"p.{quote_identifier(col)} DESC NULLS LAST" for col in order_columns)
+
+
+def latest_prediction_ctes(table_name: str, run_columns: set[str], prediction_columns: set[str]) -> str:
+    status_filter = (
+        "AND LOWER(COALESCE(r.status, 'success')) IN ('success', 'succeeded', 'complete', 'completed')"
+        if "status" in run_columns
+        else ""
+    )
+    order_columns = [
+        col
+        for col in ["completed_at", "created_at", "game_prediction_run_id"]
+        if col in run_columns
+    ]
+    order_sql = ", ".join(f"r.{quote_identifier(col)} DESC NULLS LAST" for col in order_columns)
+    if not order_sql:
+        order_sql = "r.game_prediction_run_id DESC"
+
+    return f"""
+        WITH latest_run AS (
+            SELECT r.game_prediction_run_id
+            FROM public.game_prediction_runs r
+            WHERE r.season = :season
+              {status_filter}
+              AND EXISTS (
+                  SELECT 1
+                  FROM {prediction_table_sql(table_name)} p
+                  WHERE p.game_prediction_run_id = r.game_prediction_run_id
+              )
+            ORDER BY {order_sql}
+            LIMIT 1
+        ),
+        latest_predictions AS (
+            SELECT DISTINCT ON (p.gameid)
+                p.*
+            FROM {prediction_table_sql(table_name)} p
+            JOIN latest_run lr
+              ON p.game_prediction_run_id = lr.game_prediction_run_id
+            ORDER BY p.gameid{prediction_row_order_sql(prediction_columns)}
+        )
+    """
+
+
 @st.cache_data(ttl=300)
 def get_power_rating_games(season: int) -> tuple[pd.DataFrame, str]:
-    prediction_columns = get_table_columns("game_predictions_full")
+    prediction_table, prediction_columns = get_prediction_source()
+    run_columns = get_table_columns("game_prediction_runs")
     margin_sql, margin_source = get_prediction_margin_select(prediction_columns)
 
     has_game_predictions = bool(prediction_columns and "gameid" in prediction_columns)
-    if "homewinprob" in prediction_columns:
-        homewinprob_sql = "p.homewinprob::float AS homewinprob"
-    elif "awaywinprob" in prediction_columns:
-        homewinprob_sql = "(1 - p.awaywinprob::float) AS homewinprob"
+    home_probability_col = first_existing(prediction_columns, HOME_WIN_PROBABILITY_COLUMNS)
+    away_probability_col = first_existing(prediction_columns, AWAY_WIN_PROBABILITY_COLUMNS)
+    if home_probability_col:
+        homewinprob_sql = f"{probability_sql(home_probability_col)} AS homewinprob"
+    elif away_probability_col:
+        homewinprob_sql = f"(1 - {probability_sql(away_probability_col)}) AS homewinprob"
     else:
         homewinprob_sql = "NULL::float AS homewinprob"
 
-    if has_game_predictions and "game_prediction_run_id" in prediction_columns:
+    if (
+        has_game_predictions
+        and "game_prediction_run_id" in prediction_columns
+        and {"season", "game_prediction_run_id"}.issubset(run_columns)
+    ):
         prediction_join_sql = f"""
-        WITH latest_run AS (
-            SELECT game_prediction_run_id
-            FROM public.game_prediction_runs
-            WHERE season = :season
-              AND COALESCE(status, 'success') = 'success'
-            ORDER BY created_at DESC
-            LIMIT 1
-        )
+        {latest_prediction_ctes(prediction_table, run_columns, prediction_columns)}
         SELECT
             g.id,
             g.hometeam,
@@ -573,11 +662,8 @@ def get_power_rating_games(season: int) -> tuple[pd.DataFrame, str]:
             {margin_sql} AS predicted_home_margin,
             {homewinprob_sql}
         FROM public.game_data g
-        LEFT JOIN latest_run lr
-          ON TRUE
-        LEFT JOIN public.game_predictions_full p
-          ON p.game_prediction_run_id = lr.game_prediction_run_id
-         AND p.gameid = g.id::text
+        LEFT JOIN latest_predictions p
+          ON p.gameid = g.id::text
         WHERE g.season = :season
           AND g.hometeam IS NOT NULL
           AND g.awayteam IS NOT NULL
@@ -598,7 +684,7 @@ def get_power_rating_games(season: int) -> tuple[pd.DataFrame, str]:
             {margin_sql} AS predicted_home_margin,
             {homewinprob_sql}
         FROM public.game_data g
-        LEFT JOIN public.game_predictions_full p
+        LEFT JOIN {prediction_table_sql(prediction_table)} p
           ON p.gameid = g.id::text
         WHERE g.season = :season
           AND g.hometeam IS NOT NULL

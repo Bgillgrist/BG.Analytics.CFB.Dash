@@ -32,6 +32,22 @@ SEASON_ODDS_COLUMNS = [
     "national_champion_prob",
 ]
 GAME_NOTES_COLUMNS = ["notes", "game_notes", "gamenotes", "game_note", "note"]
+HOME_WIN_PROBABILITY_COLUMNS = [
+    "homewinprob",
+    "home_win_probability",
+    "home_win_prob",
+    "homewinprobability",
+    "home_win_pct",
+    "home_wp",
+]
+AWAY_WIN_PROBABILITY_COLUMNS = [
+    "awaywinprob",
+    "away_win_probability",
+    "away_win_prob",
+    "awaywinprobability",
+    "away_win_pct",
+    "away_wp",
+]
 
 RANKING_OPTIONS = {
     "AP": {
@@ -173,6 +189,104 @@ def get_team_hex(team: str | None) -> str:
 
 def quote_identifier(identifier: str) -> str:
     return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+
+
+def first_existing(columns: set[str], candidates: list[str]) -> str | None:
+    return next((col for col in candidates if col in columns), None)
+
+
+def probability_sql(column: str) -> str:
+    value_sql = f"p.{quote_identifier(column)}::float"
+    return f"(CASE WHEN {value_sql} > 1 THEN {value_sql} / 100.0 ELSE {value_sql} END)"
+
+
+def prediction_table_sql(table_name: str) -> str:
+    return f"public.{quote_identifier(table_name)}"
+
+
+def get_prediction_source() -> tuple[str, set[str]]:
+    prediction_columns = get_table_columns("game_predictions_full")
+    if "gameid" in prediction_columns:
+        return "game_predictions_full", prediction_columns
+    return "game_predictions", get_table_columns("game_predictions")
+
+
+def team_win_probability_sql(prediction_columns: set[str]) -> str:
+    home_col = first_existing(prediction_columns, HOME_WIN_PROBABILITY_COLUMNS)
+    away_col = first_existing(prediction_columns, AWAY_WIN_PROBABILITY_COLUMNS)
+
+    if home_col:
+        home_team_probability = probability_sql(home_col)
+    elif away_col:
+        home_team_probability = f"(1 - {probability_sql(away_col)})"
+    else:
+        home_team_probability = "NULL::float"
+
+    if away_col:
+        away_team_probability = probability_sql(away_col)
+    elif home_col:
+        away_team_probability = f"(1 - {probability_sql(home_col)})"
+    else:
+        away_team_probability = "NULL::float"
+
+    return f"""
+            CASE
+                WHEN g.hometeam = :team THEN {home_team_probability}
+                WHEN g.awayteam = :team THEN {away_team_probability}
+                ELSE NULL::float
+            END
+    """
+
+
+def prediction_row_order_sql(prediction_columns: set[str]) -> str:
+    order_columns = [
+        col
+        for col in ["updated_at", "created_at", "game_prediction_id", "id"]
+        if col in prediction_columns and col != "gameid"
+    ]
+    if not order_columns:
+        return ""
+    return ", " + ", ".join(f"p.{quote_identifier(col)} DESC NULLS LAST" for col in order_columns)
+
+
+def latest_prediction_ctes(table_name: str, run_columns: set[str], prediction_columns: set[str]) -> str:
+    status_filter = (
+        "AND LOWER(COALESCE(r.status, 'success')) IN ('success', 'succeeded', 'complete', 'completed')"
+        if "status" in run_columns
+        else ""
+    )
+    order_columns = [
+        col
+        for col in ["completed_at", "created_at", "game_prediction_run_id"]
+        if col in run_columns
+    ]
+    order_sql = ", ".join(f"r.{quote_identifier(col)} DESC NULLS LAST" for col in order_columns)
+    if not order_sql:
+        order_sql = "r.game_prediction_run_id DESC"
+
+    return f"""
+        WITH latest_run AS (
+            SELECT r.game_prediction_run_id
+            FROM public.game_prediction_runs r
+            WHERE r.season = :season
+              {status_filter}
+              AND EXISTS (
+                  SELECT 1
+                  FROM {prediction_table_sql(table_name)} p
+                  WHERE p.game_prediction_run_id = r.game_prediction_run_id
+              )
+            ORDER BY {order_sql}
+            LIMIT 1
+        ),
+        latest_predictions AS (
+            SELECT DISTINCT ON (p.gameid)
+                p.*
+            FROM {prediction_table_sql(table_name)} p
+            JOIN latest_run lr
+              ON p.game_prediction_run_id = lr.game_prediction_run_id
+            ORDER BY p.gameid{prediction_row_order_sql(prediction_columns)}
+        )
+    """
 
 
 def get_table_columns(table_name: str) -> set[str]:
@@ -976,30 +1090,36 @@ if selected_team:
     now = pd.Timestamp.now(tz="UTC")
 
     # Team games + win probabilities
-    team_games = read_df(
-        """
-        WITH latest_run AS (
-            SELECT game_prediction_run_id
-            FROM public.game_prediction_runs
-            WHERE season = :season
-              AND status = 'success'
-            ORDER BY created_at DESC
-            LIMIT 1
-        )
+    prediction_table, prediction_columns = get_prediction_source()
+    run_columns = get_table_columns("game_prediction_runs")
+    has_game_predictions = (
+        "gameid" in prediction_columns
+        and "game_prediction_run_id" in prediction_columns
+        and {"season", "game_prediction_run_id"}.issubset(run_columns)
+    )
+    prediction_sql = (
+        f"""
+        {latest_prediction_ctes(prediction_table, run_columns, prediction_columns)}
         SELECT
             g.*,
-            p.model_version AS model_version,
-            CASE
-                WHEN g.hometeam = :team THEN p.homewinprob
-                WHEN g.awayteam = :team THEN p.awaywinprob
-                ELSE NULL
-            END AS teamwinprob
+            {"p.model_version AS model_version" if "model_version" in prediction_columns else "NULL::text AS model_version"},
+            {team_win_probability_sql(prediction_columns)} AS teamwinprob
         FROM public.game_data g
-        LEFT JOIN latest_run r
-          ON TRUE
-        LEFT JOIN public.game_predictions_full p
-          ON p.game_prediction_run_id = r.game_prediction_run_id
-         AND p.gameid = g.id::text
+        LEFT JOIN latest_predictions p
+          ON p.gameid = g.id::text
+        """
+        if has_game_predictions
+        else """
+        SELECT
+            g.*,
+            NULL::text AS model_version,
+            NULL::float AS teamwinprob
+        FROM public.game_data g
+        """
+    )
+    team_games = read_df(
+        f"""
+        {prediction_sql}
         WHERE g.season = :season
           AND g.startdate IS NOT NULL
           AND (g.hometeam = :team OR g.awayteam = :team)
@@ -1048,7 +1168,9 @@ if selected_team:
             upcoming_games.assign(
                 Date=upcoming_start_et.dt.strftime("%m/%d/%Y"),
                 Time=time_display,
-                win_probability=pd.to_numeric(upcoming_games["teamwinprob"], errors="coerce"),
+                win_probability=upcoming_games["teamwinprob"].map(
+                    lambda value: np.nan if pd.isna(value) else scale_probability(value)
+                ),
             )[
                 ["Date", "Time", "hometeam", "awayteam", "win_probability", "model_version"]
             ].rename(
