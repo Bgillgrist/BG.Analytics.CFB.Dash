@@ -206,92 +206,286 @@ def league_percentile_for_stat(season: int, stat_col: str, value: float, higher_
     pct = float(s2.rank(pct=True).iloc[-1]) * 100.0
     return pct
 
+
 def grade_from_percentile(pct: float) -> tuple[str, str, str]:
-    """Map percentile (0-100) to (letter, background, foreground)."""
+    """Return (letter, bg_hex, fg_hex) from a 0-100 percentile.
+
+    Grade bands match the season report card.
+    """
+    pct = float(max(0.0, min(100.0, pct)))
+
     if pct >= 94:
-        return ("A+", "#166534", "#FFFFFF")
+        return ("A+", "#0B3D1A", "#FFFFFF")
     if pct >= 86:
-        return ("A", "#15803d", "#FFFFFF")
+        return ("A", "#145A32", "#FFFFFF")
     if pct >= 80:
-        return ("A-", "#16a34a", "#FFFFFF")
+        return ("A-", "#1E7D3A", "#FFFFFF")
     if pct >= 74:
-        return ("B+", "#4ade80", "#14532d")
-    if pct >= 68:
-        return ("B", "#86efac", "#14532d")
-    if pct >= 62:
-        return ("B-", "#bbf7d0", "#14532d")
-    if pct >= 56:
-        return ("C+", "#fde68a", "#78350f")
-    if pct >= 50:
-        return ("C", "#fcd34d", "#78350f")
-    if pct >= 44:
-        return ("C-", "#fbbf24", "#78350f")
-    if pct >= 38:
-        return ("D+", "#fdba74", "#7c2d12")
-    if pct >= 32:
-        return ("D", "#fb923c", "#7c2d12")
+        return ("B+", "#2ECC71", "#0B2E13")
+    if pct >= 66:
+        return ("B", "#58D68D", "#0B2E13")
+    if pct >= 60:
+        return ("B-", "#82E0AA", "#0B2E13")
+    if pct >= 54:
+        return ("C+", "#F7DC6F", "#4D3B00")
+    if pct >= 46:
+        return ("C", "#F4D03F", "#4D3B00")
+    if pct >= 40:
+        return ("C-", "#F9E79F", "#4D3B00")
+    if pct >= 34:
+        return ("D+", "#F8C471", "#5A2E00")
     if pct >= 26:
-        return ("D-", "#f97316", "#FFFFFF")
-    return ("F", "#dc2626", "#FFFFFF")
-
-# ============================
-# GAME SUMMARY (GOOD/BAD)
-# ============================
-
-# Sample stat catalog (we'll tune these later)
-# key: display label, value: (column_name, higher_is_better)
-GAME_STAT_CATALOG: list[tuple[str, str, bool]] = [
-    ("Offensive Success Rate", "offense_successrate", True),
-    ("Offensive Explosiveness", "offense_explosiveness", True),
-    ("Power Success", "offense_powersuccess", True),
-    ("Line Yards", "offense_lineyards", True),
-
-    ("Defensive Success Rate Allowed", "defense_successrate", False),
-    ("Defensive Explosiveness Allowed", "defense_explosiveness", False),
-    ("Stuff Rate", "defense_stuffrate", True),
-]
+        return ("D", "#F5B041", "#5A2E00")
+    if pct >= 20:
+        return ("D-", "#F0B27A", "#5A2E00")
+    return ("F", "#E74C3C", "#FFFFFF")
 
 
-def compute_game_percentiles(
+def _grade_from_stats(
     stats: pd.DataFrame,
     season: int,
-    stat_catalog: list[tuple[str, str, bool]] = GAME_STAT_CATALOG,
-) -> pd.DataFrame:
-    """Return a df with columns: label, col, value, pct.
-
-    Percentiles are league-wide for the selected season (all FBS team-games).
-    """
-    if stats.empty:
-        return pd.DataFrame(columns=["label", "col", "value", "pct"])  # empty
-
-    rows: list[dict] = []
-    for label, col, higher_is_better in stat_catalog:
-        if col not in stats.columns:
-            continue
-        v = stats[col].iloc[0]
-        if pd.isna(v):
-            continue
-
-        pct = league_percentile_for_stat(int(season), col, float(v), higher_is_better=higher_is_better)
-        rows.append({"label": label, "col": col, "value": float(v), "pct": float(pct)})
-
-    if not rows:
-        return pd.DataFrame(columns=["label", "col", "value", "pct"])  # empty
-
-    out = pd.DataFrame(rows)
-    out = out.sort_values("pct", ascending=False).reset_index(drop=True)
-    return out
+    col: str,
+    higher_is_better: bool = True,
+) -> tuple[str, str, str] | None:
+    """Safely compute a game-level grade for one stat column."""
+    if col not in stats.columns:
+        return None
+    v = stats[col].iloc[0]
+    if pd.isna(v):
+        return None
+    pct = league_percentile_for_stat(int(season), col, float(v), higher_is_better=higher_is_better)
+    return grade_from_percentile(pct)
 
 
-def render_good_bad_panel(
+# ============================
+# HTML RENDERING HELPERS
+# ============================
+
+def _rc_pill(text: str, g: tuple[str, str, str] | None) -> tuple[str, str, str]:
+    """Return (label_text, bg, fg) for a pill."""
+    if not g:
+        return (text, "", "")
+    letter, bg, fg = g
+    return (f"{text}: {letter}", bg, fg)
+
+
+def _rc_pos_with_overall(label: str, g: tuple[str, str, str] | None) -> str:
+    """Left-column label with a small Overall pill underneath."""
+    if not g:
+        return f"<div class='rc-pos-wrap'><div>{label}</div><span class='rc-pill'>Overall</span></div>"
+    letter, bg, fg = g
+    return (
+        f"<div class='rc-pos-wrap'>"
+        f"<div>{label}</div>"
+        f"<span class='rc-pill-grade rc-pos-overall' style='background:{bg}; color:{fg};'>Overall: {letter}</span>"
+        f"</div>"
+    )
+
+
+def _rc_pill_html(text: str, bg: str, fg: str) -> str:
+    """Render one pill span."""
+    if bg and fg:
+        return (
+            f"<span class='rc-pill-grade' style='background:{bg}; color:{fg};'>"
+            f"{text}"
+            f"</span>"
+        )
+    return f"<span class='rc-pill'>{text}</span>"
+
+
+def _rc_rows_html(rows: list[tuple[str, list[tuple[str, str, str]]]]) -> str:
+    """Build the 2-column grid HTML (left label + right pill group per row)."""
+    return "".join(
+        [
+            f"<div class='rc-pos'>{pos}</div>"
+            f"<div class='rc-pills'>"
+            + "".join([_rc_pill_html(t, bg, fg) for (t, bg, fg) in pills])
+            + "</div>"
+            for pos, pills in rows
+        ]
+    )
+
+
+def _rc_header_grade(overall: tuple[str, str, str] | None) -> str:
+    """Big header grade pill (right side of card header)."""
+    if not overall:
+        return ""
+    letter, bg, fg = overall
+    return f"<span class='rc-head-grade' style='background:{bg}; color:{fg};'>{letter}</span>"
+
+
+# ============================
+# CARD RENDERERS
+# ============================
+
+def render_offense_card(
+    team_hex: str,
+    offense_overall: tuple[str, str, str] | None = None,
+    passing_overall: tuple[str, str, str] | None = None,
+    passing_efficiency: tuple[str, str, str] | None = None,
+    passing_explosiveness: tuple[str, str, str] | None = None,
+    rushing_overall: tuple[str, str, str] | None = None,
+    rushing_efficiency: tuple[str, str, str] | None = None,
+    rushing_explosiveness: tuple[str, str, str] | None = None,
+    rushing_power: tuple[str, str, str] | None = None,
+    ol_pass_protection: tuple[str, str, str] | None = None,
+    ol_run_blocking: tuple[str, str, str] | None = None,
+) -> None:
+    """Render offense report card."""
+    rows: list[tuple[str, list[tuple[str, str, str]]]] = [
+        (
+            _rc_pos_with_overall("Passing", passing_overall),
+            [
+                _rc_pill("Efficiency", passing_efficiency),
+                _rc_pill("Explosiveness", passing_explosiveness),
+            ],
+        ),
+        (
+            _rc_pos_with_overall("Rushing", rushing_overall),
+            [
+                _rc_pill("Efficiency", rushing_efficiency),
+                _rc_pill("Explosiveness", rushing_explosiveness),
+                _rc_pill("Power", rushing_power),
+            ],
+        ),
+        (
+            "O-Line",
+            [
+                _rc_pill("Pass Protection", ol_pass_protection),
+                _rc_pill("Run Blocking", ol_run_blocking),
+            ],
+        ),
+    ]
+
+    rows_html = _rc_rows_html(rows)
+    title_right = _rc_header_grade(offense_overall)
+
+    st.markdown(
+        f"""
+        <div class='rc-card' style='border-left: 6px solid {team_hex};'>
+          <div class='rc-head'>
+            <div class='rc-title'>Offense</div>
+            {title_right}
+          </div>
+          <div class='rc-grid'>
+            {rows_html}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_defense_card(
+    team_hex: str,
+    defense_overall: tuple[str, str, str] | None = None,
+    pass_overall: tuple[str, str, str] | None = None,
+    pass_efficiency: tuple[str, str, str] | None = None,
+    pass_db_havoc: tuple[str, str, str] | None = None,
+    run_overall: tuple[str, str, str] | None = None,
+    run_efficiency: tuple[str, str, str] | None = None,
+    run_stuff_rate: tuple[str, str, str] | None = None,
+    pass_explosiveness_allowed: tuple[str, str, str] | None = None,
+    run_explosiveness_allowed: tuple[str, str, str] | None = None,
+) -> None:
+    """Render defense report card."""
+    rows: list[tuple[str, list[tuple[str, str, str]]]] = [
+        (
+            _rc_pos_with_overall("Pass D", pass_overall),
+            [
+                _rc_pill("Efficiency", pass_efficiency),
+                _rc_pill("DB Havoc", pass_db_havoc),
+                _rc_pill("Explosive Plays Allowed", pass_explosiveness_allowed),
+            ],
+        ),
+        (
+            _rc_pos_with_overall("Run Stop", run_overall),
+            [
+                _rc_pill("Efficiency", run_efficiency),
+                _rc_pill("Stuff Rate", run_stuff_rate),
+                _rc_pill("Explosive Plays Allowed", run_explosiveness_allowed),
+            ],
+        ),
+    ]
+
+    rows_html = _rc_rows_html(rows)
+    title_right = _rc_header_grade(defense_overall)
+
+    st.markdown(
+        f"""
+        <div class='rc-card' style='border-left: 6px solid {team_hex};'>
+          <div class='rc-head'>
+            <div class='rc-title'>Defense</div>
+            {title_right}
+          </div>
+          <div class='rc-grid'>
+            {rows_html}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ============================
+# GRADE COMPUTATION
+# ============================
+
+def compute_offense_grades(stats: pd.DataFrame, season: int) -> dict[str, tuple[str, str, str] | None]:
+    """Compute all offense grades for the report card from one team-game row."""
+    return {
+        "offense_overall": _grade_from_stats(stats, season, "offense_ppa", higher_is_better=True),
+
+        "passing_overall": _grade_from_stats(stats, season, "offense_passingplays_ppa", higher_is_better=True),
+        "passing_efficiency": _grade_from_stats(stats, season, "offense_passingplays_successrate", higher_is_better=True),
+        "passing_explosiveness": _grade_from_stats(stats, season, "offense_passingplays_explosiveness", higher_is_better=True),
+
+        "rushing_overall": _grade_from_stats(stats, season, "offense_rushingplays_ppa", higher_is_better=True),
+        "rushing_efficiency": _grade_from_stats(stats, season, "offense_rushingplays_successrate", higher_is_better=True),
+        "rushing_explosiveness": _grade_from_stats(stats, season, "offense_rushingplays_explosiveness", higher_is_better=True),
+        "rushing_power": _grade_from_stats(stats, season, "offense_powersuccess", higher_is_better=True),
+
+        "ol_pass_protection": _grade_from_stats(stats, season, "offense_havoc_frontseven", higher_is_better=False),
+        "ol_run_blocking": _grade_from_stats(stats, season, "offense_lineyards", higher_is_better=True),
+    }
+
+
+def compute_defense_grades(stats: pd.DataFrame, season: int) -> dict[str, tuple[str, str, str] | None]:
+    """Compute all defense grades for the report card from one team-game row."""
+    return {
+        # Overall defense: lower is better
+        "defense_overall": _grade_from_stats(stats, season, "defense_ppa", higher_is_better=False),
+
+        # Passing
+        "pass_overall": _grade_from_stats(stats, season, "defense_passingplays_ppa", higher_is_better=False),
+        "pass_efficiency": _grade_from_stats(stats, season, "defense_passingplays_successrate", higher_is_better=False),
+        "pass_db_havoc": _grade_from_stats(stats, season, "defense_havoc_db", higher_is_better=True),
+        "pass_explosiveness_allowed": _grade_from_stats(stats, season, "defense_passingplays_explosiveness", higher_is_better=False),
+
+        # Run Stop
+        "run_overall": _grade_from_stats(stats, season, "defense_rushingplays_ppa", higher_is_better=False),
+        "run_efficiency": _grade_from_stats(stats, season, "defense_rushingplays_successrate", higher_is_better=False),
+        "run_stuff_rate": _grade_from_stats(stats, season, "defense_stuffrate", higher_is_better=True),
+        "run_explosiveness_allowed": _grade_from_stats(stats, season, "defense_rushingplays_explosiveness", higher_is_better=False),
+    }
+
+
+# ============================
+# PAGE LAYOUT
+# ============================
+
+def render_side_panel(
     team: str | None,
     season: int | None,
     game_label: str | None,
     team_hex: str,
     stats: pd.DataFrame,
-    top_n: int = 3,
 ) -> None:
-    """Render a single team panel showing top/bottom percentiles for the selected game."""
+    """Render one side (header + offense/defense cards) for the selected game."""
+    label = f"{team} ({season})" if team and season else (team or "")
+    st.subheader(label)
+    if game_label:
+        st.caption(game_label)
 
     if not team or season is None:
         st.info("Select a game.")
@@ -301,108 +495,34 @@ def render_good_bad_panel(
         st.info("No game stats for that team/game.")
         return
 
-    # Headline percentiles (always shown)
-    off_pct = None
-    def_pct = None
-    overall_pct = None
+    off_grades = compute_offense_grades(stats, int(season))
+    def_grades = compute_defense_grades(stats, int(season))
 
-    if "offense_ppa" in stats.columns and not pd.isna(stats["offense_ppa"].iloc[0]):
-        off_pct = league_percentile_for_stat(int(season), "offense_ppa", float(stats["offense_ppa"].iloc[0]), higher_is_better=True)
-
-    if "defense_ppa" in stats.columns and not pd.isna(stats["defense_ppa"].iloc[0]):
-        def_pct = league_percentile_for_stat(int(season), "defense_ppa", float(stats["defense_ppa"].iloc[0]), higher_is_better=False)
-
-    if off_pct is not None and def_pct is not None:
-        overall_pct = (float(off_pct) + float(def_pct)) / 2.0
-
-    overall_grade = grade_from_percentile(overall_pct) if overall_pct is not None else None
-    off_grade = grade_from_percentile(off_pct) if off_pct is not None else None
-    def_grade = grade_from_percentile(def_pct) if def_pct is not None else None
-
-    pcts = compute_game_percentiles(stats, int(season))
-    if pcts.empty:
-        st.info("No comparable stats available for this game.")
-        return
-
-    good = pcts.head(top_n).copy()
-    bad = pcts.tail(top_n).sort_values("pct", ascending=True).copy()
-
-    if overall_grade:
-        overall_letter, overall_bg, overall_fg = overall_grade
-        overall_html = f"<span class='rc-head-grade' style='background:{overall_bg}; color:{overall_fg};'>Overall: {overall_letter}</span>"
-    else:
-        overall_html = "<span class='rc-pill'>Overall: N/A</span>"
-
-    if off_grade:
-        off_letter, off_bg, off_fg = off_grade
-        offense_html = f"<span class='rc-pill-grade' style='background:{off_bg}; color:{off_fg}; border:1px solid rgba(49, 51, 63, 0.18);'>Offense: {off_letter}</span>"
-    else:
-        offense_html = "<span class='rc-pill' style='border:1px solid rgba(49, 51, 63, 0.18);'>Offense: N/A</span>"
-
-    if def_grade:
-        def_letter, def_bg, def_fg = def_grade
-        defense_html = f"<span class='rc-pill-grade' style='background:{def_bg}; color:{def_fg}; border:1px solid rgba(49, 51, 63, 0.18);'>Defense: {def_letter}</span>"
-    else:
-        defense_html = "<span class='rc-pill' style='border:1px solid rgba(49, 51, 63, 0.18);'>Defense: N/A</span>"
-
-    good_rows_html = "".join(
-        [
-            (
-                f"<div style='display:flex; justify-content:space-between; gap:0.6rem; padding:0.12rem 0;'>"
-                f"<span style='font-weight:650;'>{r.label}</span>"
-                f"<span class='rc-pill-grade' style='background:{grade_from_percentile(float(r.pct))[1]}; color:{grade_from_percentile(float(r.pct))[2]};'>"
-                f"{grade_from_percentile(float(r.pct))[0]}"
-                f"</span></div>"
-            )
-            for r in good.itertuples()
-        ]
+    render_offense_card(
+        team_hex,
+        offense_overall=off_grades["offense_overall"],
+        passing_overall=off_grades["passing_overall"],
+        passing_efficiency=off_grades["passing_efficiency"],
+        passing_explosiveness=off_grades["passing_explosiveness"],
+        rushing_overall=off_grades["rushing_overall"],
+        rushing_efficiency=off_grades["rushing_efficiency"],
+        rushing_explosiveness=off_grades["rushing_explosiveness"],
+        rushing_power=off_grades["rushing_power"],
+        ol_pass_protection=off_grades["ol_pass_protection"],
+        ol_run_blocking=off_grades["ol_run_blocking"],
     )
 
-    bad_rows_html = "".join(
-        [
-            (
-                f"<div style='display:flex; justify-content:space-between; gap:0.6rem; padding:0.12rem 0;'>"
-                f"<span style='font-weight:650;'>{r.label}</span>"
-                f"<span class='rc-pill-grade' style='background:{grade_from_percentile(float(r.pct))[1]}; color:{grade_from_percentile(float(r.pct))[2]};'>"
-                f"{grade_from_percentile(float(r.pct))[0]}"
-                f"</span></div>"
-            )
-            for r in bad.itertuples()
-        ]
-    )
-
-    # Header
-    st.markdown(
-        f"""
-        <div class='rc-card'>
-          <div class='rc-head'>
-            <div>
-              <div class='rc-title'>{team}</div>
-              <div style='font-size:0.85rem; opacity:0.8; margin-top:0.05rem;'>{game_label or ''}</div>
-            </div>
-            {overall_html}
-          </div>
-
-          <div style='display:flex; flex-direction:column; align-items:center; gap:0.35rem; margin:0.15rem 0 0.55rem 0;'>
-            <div style='display:flex; gap:0.45rem; flex-wrap:wrap; justify-content:center;'>
-              {offense_html}
-              {defense_html}
-            </div>
-          </div>
-
-          <div style='display:grid; grid-template-columns: 1fr; gap:0.5rem;'>
-            <div>
-              <div style='font-weight:800; font-size:0.95rem; margin-bottom:0.25rem;'>What was good</div>
-              {good_rows_html}
-            </div>
-            <div>
-              <div style='font-weight:800; font-size:0.95rem; margin-bottom:0.25rem;'>What was bad</div>
-              {bad_rows_html}
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    render_defense_card(
+        team_hex,
+        defense_overall=def_grades["defense_overall"],
+        pass_overall=def_grades["pass_overall"],
+        pass_efficiency=def_grades["pass_efficiency"],
+        pass_db_havoc=def_grades["pass_db_havoc"],
+        run_overall=def_grades["run_overall"],
+        run_efficiency=def_grades["run_efficiency"],
+        run_stuff_rate=def_grades["run_stuff_rate"],
+        pass_explosiveness_allowed=def_grades["pass_explosiveness_allowed"],
+        run_explosiveness_allowed=def_grades["run_explosiveness_allowed"],
     )
 
 
@@ -478,9 +598,6 @@ else:
 season_a = int(season_sel) if season_sel is not None else None
 season_b = int(season_sel) if season_sel is not None else None
 
-label_a = f"{team_a} ({season_a})" if team_a and season_a else (team_a or "")
-label_b = f"{team_b} ({season_b})" if team_b and season_b else (team_b or "")
-
 team_hex_a = get_team_hex(team_a)
 team_hex_b = get_team_hex(team_b)
 
@@ -492,7 +609,7 @@ stats_b = get_team_game_stats(team_b, game_id_sel)
 out_left, out_right = st.columns(2, gap="large")
 
 with out_left:
-    render_good_bad_panel(team_a, season_a, game_label_sel, team_hex_a, stats_a, top_n=3)
+    render_side_panel(team_a, season_a, game_label_sel, team_hex_a, stats_a)
 
 with out_right:
-    render_good_bad_panel(team_b, season_b, game_label_sel, team_hex_b, stats_b, top_n=3)
+    render_side_panel(team_b, season_b, game_label_sel, team_hex_b, stats_b)
