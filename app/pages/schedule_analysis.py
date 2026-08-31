@@ -337,10 +337,20 @@ def filter_by_week(schedule: pd.DataFrame, week_label: str) -> pd.DataFrame:
 def normalize_probability(value: object) -> float | None:
     if value is None or pd.isna(value):
         return None
-    value = float(value)
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
     if value > 1:
         value = value / 100
     return float(np.clip(value, 0, 1))
+
+
+def projected_winner_team(row: pd.Series) -> str:
+    home_probability = normalize_probability(row.get("home_win_probability"))
+    if home_probability is None:
+        return ""
+    return safe_text(row.get("hometeam")) if home_probability >= 0.5 else safe_text(row.get("awayteam"))
 
 
 def implied_margin_from_probability(probability: pd.Series) -> pd.Series:
@@ -352,9 +362,31 @@ def projected_winner_label(row: pd.Series) -> str:
     home_probability = normalize_probability(row.get("home_win_probability"))
     if home_probability is None:
         return ""
-    if home_probability >= 0.5:
-        return f"{safe_text(row.get('hometeam'))}: {home_probability:.1%}"
-    return f"{safe_text(row.get('awayteam'))}: {1 - home_probability:.1%}"
+    winner = projected_winner_team(row)
+    winner_probability = home_probability if home_probability >= 0.5 else 1 - home_probability
+    return f"{winner}: {winner_probability:.1%}"
+
+
+def prediction_outcome(row: pd.Series) -> str:
+    if not bool(row.get("completed", False)):
+        return ""
+    projected_team = team_key(projected_winner_team(row))
+    actual_winner = team_key(row.get("winner_team"))
+    if not projected_team or not actual_winner:
+        return ""
+    return "correct" if projected_team == actual_winner else "wrong"
+
+
+def weekly_row_style(outcomes: pd.Series):
+    def style_row(row: pd.Series) -> list[str]:
+        outcome = outcomes.get(row.name, "")
+        if outcome == "correct":
+            return ["background-color: #dcfce7; color: #14532d;"] * len(row)
+        if outcome == "wrong":
+            return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
+        return [""] * len(row)
+
+    return style_row
 
 
 def fmt_line_type(value: object) -> str:
@@ -476,27 +508,27 @@ def latest_prediction_ctes(table_name: str, run_columns: set[str], prediction_co
     if not order_sql:
         order_sql = "r.game_prediction_run_id DESC"
 
+    run_time_columns = [col for col in ["completed_at", "created_at"] if col in run_columns]
+    if run_time_columns:
+        run_time_sql = "COALESCE(" + ", ".join(f"r.{quote_identifier(col)}" for col in run_time_columns) + ")"
+        pregame_filter = f"AND (g.startdate IS NULL OR {run_time_sql} IS NULL OR {run_time_sql} <= g.startdate)"
+    else:
+        pregame_filter = ""
+
     return f"""
-        WITH latest_run AS (
-            SELECT r.game_prediction_run_id
-            FROM public.game_prediction_runs r
-            WHERE r.season = :season
-              {status_filter}
-              AND EXISTS (
-                  SELECT 1
-                  FROM {prediction_table_sql(table_name)} p
-                  WHERE p.game_prediction_run_id = r.game_prediction_run_id
-              )
-            ORDER BY {order_sql}
-            LIMIT 1
-        ),
-        latest_predictions AS (
+        WITH latest_predictions AS (
             SELECT DISTINCT ON (p.gameid)
                 p.*
             FROM {prediction_table_sql(table_name)} p
-            JOIN latest_run lr
-              ON p.game_prediction_run_id = lr.game_prediction_run_id
-            ORDER BY p.gameid{prediction_row_order_sql(prediction_columns)}
+            JOIN public.game_prediction_runs r
+              ON p.game_prediction_run_id = r.game_prediction_run_id
+            JOIN public.game_data g
+              ON p.gameid = g.id::text
+            WHERE r.season = :season
+              AND g.season = :season
+              {status_filter}
+              {pregame_filter}
+            ORDER BY p.gameid, {order_sql}{prediction_row_order_sql(prediction_columns)}
         )
     """
 
@@ -741,11 +773,12 @@ def attach_predictions(schedule: pd.DataFrame, predictions: pd.DataFrame) -> pd.
     return df
 
 
-def weekly_table(schedule: pd.DataFrame, week_label: str, conferences: list[str]) -> pd.DataFrame:
+def weekly_table(schedule: pd.DataFrame, week_label: str, conferences: list[str]):
     df = filter_by_week(schedule, week_label)
     if conferences:
         df = df[df["homeconference"].isin(conferences) | df["awayconference"].isin(conferences)]
     df = df.sort_values(["startdate", "awayteam", "hometeam"], na_position="last")
+    outcomes = df.apply(prediction_outcome, axis=1) if not df.empty else pd.Series(dtype=str)
     display = pd.DataFrame(
         {
             "Kickoff": df["startdate"].map(fmt_time),
@@ -759,7 +792,7 @@ def weekly_table(schedule: pd.DataFrame, week_label: str, conferences: list[str]
             ),
         }
     )
-    return display
+    return display.style.apply(weekly_row_style(outcomes), axis=1)
 
 
 def filtered_week_games(schedule: pd.DataFrame, week_label: str, conferences: list[str]) -> pd.DataFrame:
