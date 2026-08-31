@@ -103,7 +103,7 @@ LINE_TYPE_COLUMNS = [
     "Line Type",
     "lineType",
     "line_type_label",
-    "spread_line_type",
+    "model_version",
 ]
 WIN_PROBABILITY_SPREAD_SCALE = 14.0
 TEAM_ASSET_COLUMNS = [
