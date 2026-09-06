@@ -1063,6 +1063,7 @@ def build_county_conquest_map(
     ownership_histories: dict[str, list[dict[str, str]]],
     conference_assets: dict[str, dict[str, str]],
     source_label: str,
+    map_scope: str,
     map_mode: str,
     render_key: str,
     owner_teams: pd.DataFrame | None = None,
@@ -1129,6 +1130,7 @@ def build_county_conquest_map(
 
     seeds_json = json.dumps(seeds)
     source = html.escape(source_label)
+    map_scope_json = json.dumps(map_scope)
     escaped_map_mode = html.escape(map_mode)
     escaped_render_key = html.escape(render_key)
 
@@ -1194,6 +1196,7 @@ def build_county_conquest_map(
       </div>
       <script>
         const seeds = {seeds_json};
+        const mapScope = {map_scope_json};
         const mapMode = "{escaped_map_mode}";
         const renderKey = "{escaped_render_key}";
         const width = 1200;
@@ -1202,7 +1205,8 @@ def build_county_conquest_map(
         const logoLayer = d3.select("#logo-layer");
         const tooltip = d3.select("#county-tooltip");
         const excludedStateIds = new Set(["60", "66", "69", "72", "78"]);
-        const logoStorageKey = `cfb-conquest-logo-positions-v5-no-resize-${{mapMode.toLowerCase()}}`;
+        const logoScopeKey = String(mapScope || "default").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        const logoStorageKey = `cfb-conquest-logo-positions-v6-${{logoScopeKey}}-${{mapMode.toLowerCase()}}`;
 
         function getStoredLogoPositions() {{
           try {{
@@ -1980,6 +1984,7 @@ else:
         ownership_histories,
         conference_assets,
         f"{selected_season} | {map_scope} | {map_checkpoint} | {map_mode} territory map",
+        map_scope,
         map_mode,
         map_render_key,
         map_owner_teams,
