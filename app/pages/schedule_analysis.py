@@ -19,6 +19,7 @@ PPA_STATS_COLUMNS = [
     "offense_ppa_percentile",
     "defense_ppa_percentile",
 ]
+P4_PROMOTIONS_MAP_SCOPE = "P4 + Promotions"
 ALL_MAP_SCOPE = "All Teams / Conferences"
 POWER_FOUR_CONFERENCES = {"SEC", "ACC", "Big Ten", "Big 10", "Big 12"}
 G6_CONFERENCES = {"American Athletic", "Conference USA", "Mid-American", "Mountain West", "Pac-12", "Pac 12", "Sun Belt"}
@@ -943,12 +944,20 @@ def compute_land_ownership_history(
     schedule: pd.DataFrame,
     teams: pd.DataFrame,
     map_checkpoint: str,
+    owner_teams: pd.DataFrame | None = None,
 ) -> tuple[dict[str, str], dict[str, list[dict[str, str]]]]:
     teams = teams.copy()
     teams["team_key"] = teams["team"].map(team_key)
     owners = {key: key for key in teams["team_key"].dropna().astype(str)}
     team_lookup_columns = ["team", "conference", "team_logo", "team_logo_dark", "team_color"]
-    team_lookup = teams.drop_duplicates(subset=["team_key"]).set_index("team_key")[team_lookup_columns].to_dict("index")
+    lookup_teams = teams if owner_teams is None else pd.concat([teams, owner_teams], ignore_index=True)
+    lookup_teams = lookup_teams.copy()
+    lookup_teams["team_key"] = lookup_teams["team"].map(team_key)
+    team_lookup = (
+        lookup_teams.drop_duplicates(subset=["team_key"])
+        .set_index("team_key")[team_lookup_columns]
+        .to_dict("index")
+    )
 
     played = schedule[
         schedule["week_number"].notna()
@@ -1022,7 +1031,7 @@ def compute_land_ownership_history(
             loser = team_key(getattr(game, "loser_team"))
             if not winner or not loser or winner == loser:
                 continue
-            if winner not in owners or loser not in owners:
+            if loser not in set(owners.values()):
                 continue
             for seed_team, current_owner in list(owners.items()):
                 if current_owner == loser:
@@ -1056,6 +1065,7 @@ def build_county_conquest_map(
     source_label: str,
     map_mode: str,
     render_key: str,
+    owner_teams: pd.DataFrame | None = None,
 ) -> str:
     if teams.empty:
         return ""
@@ -1063,7 +1073,14 @@ def build_county_conquest_map(
     teams = teams.copy()
     teams["team_key"] = teams["team"].map(team_key)
     team_lookup_columns = ["team", "conference", "team_logo", "team_logo_dark", "team_color"]
-    team_lookup = teams.drop_duplicates(subset=["team_key"]).set_index("team_key")[team_lookup_columns].to_dict("index")
+    lookup_teams = teams if owner_teams is None else pd.concat([teams, owner_teams], ignore_index=True)
+    lookup_teams = lookup_teams.copy()
+    lookup_teams["team_key"] = lookup_teams["team"].map(team_key)
+    team_lookup = (
+        lookup_teams.drop_duplicates(subset=["team_key"])
+        .set_index("team_key")[team_lookup_columns]
+        .to_dict("index")
+    )
     seeds = []
     for row in teams.itertuples(index=False):
         seed_key = str(row.team_key)
@@ -1897,7 +1914,7 @@ scope_col, mode_control_col, map_control_col = st.columns([1.25, 1, 2.35])
 with scope_col:
     map_scope = st.radio(
         "Map Scope",
-        ["Power 4 + Notre Dame", "G6 + UConn", ALL_MAP_SCOPE],
+        ["Power 4 + Notre Dame", P4_PROMOTIONS_MAP_SCOPE, "G6 + UConn", ALL_MAP_SCOPE],
         horizontal=False,
     )
 with mode_control_col:
@@ -1907,26 +1924,32 @@ with mode_control_col:
         horizontal=False,
     )
 
-if map_scope == "Power 4 + Notre Dame":
+p4_team_mask = teams["conference"].isin(POWER_FOUR_CONFERENCES) | teams["team_key"].isin(NOTRE_DAME_TEAM_KEYS)
+g6_team_mask = teams["conference"].isin(G6_CONFERENCES) | teams["team_key"].isin(UCONN_TEAM_KEYS)
+
+if map_scope in {"Power 4 + Notre Dame", P4_PROMOTIONS_MAP_SCOPE}:
     map_teams = teams[
-        teams["conference"].isin(POWER_FOUR_CONFERENCES)
-        | teams["team_key"].isin(NOTRE_DAME_TEAM_KEYS)
+        p4_team_mask
     ].copy()
 elif map_scope == "G6 + UConn":
     map_teams = teams[
-        teams["conference"].isin(G6_CONFERENCES)
-        | teams["team_key"].isin(UCONN_TEAM_KEYS)
+        g6_team_mask
     ].copy()
 else:
     map_teams = teams.copy()
 
 map_team_names = set(map_teams["team_key"])
-map_schedule = schedule[
-    schedule["hometeam_key"].isin(map_team_names)
-    & schedule["awayteam_key"].isin(map_team_names)
-].copy()
+if map_scope == P4_PROMOTIONS_MAP_SCOPE:
+    map_schedule = schedule.copy()
+    map_owner_teams = teams.copy()
+else:
+    map_schedule = schedule[
+        schedule["hometeam_key"].isin(map_team_names)
+        & schedule["awayteam_key"].isin(map_team_names)
+    ].copy()
+    map_owner_teams = map_teams
 
-map_conferences = sorted(map_teams["conference"].dropna().astype(str).unique().tolist())
+map_conferences = sorted(map_owner_teams["conference"].dropna().astype(str).unique().tolist())
 conference_assets = {
     conference: DEFAULT_CONFERENCE_ASSETS.get(conference, {"color": "#64748b", "logo": ""})
     for conference in map_conferences
@@ -1944,7 +1967,12 @@ with map_control_col:
 if map_teams.empty:
     st.info("No home-stadium coordinates are available for the selected conquest map scope.")
 else:
-    owners, ownership_histories = compute_land_ownership_history(map_schedule, map_teams, map_checkpoint)
+    owners, ownership_histories = compute_land_ownership_history(
+        map_schedule,
+        map_teams,
+        map_checkpoint,
+        map_owner_teams,
+    )
     map_render_key = f"{selected_season}-{map_scope}-{map_checkpoint}-{map_mode}"
     map_html = build_county_conquest_map(
         map_teams,
@@ -1954,6 +1982,7 @@ else:
         f"{selected_season} | {map_scope} | {map_checkpoint} | {map_mode} territory map",
         map_mode,
         map_render_key,
+        map_owner_teams,
     )
     if map_html:
         components.html(map_html, height=790, scrolling=False)
