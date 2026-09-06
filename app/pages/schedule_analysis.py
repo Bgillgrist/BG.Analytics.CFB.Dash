@@ -19,6 +19,7 @@ PPA_STATS_COLUMNS = [
     "offense_ppa_percentile",
     "defense_ppa_percentile",
 ]
+ALL_MAP_SCOPE = "All Teams / Conferences"
 POWER_FOUR_CONFERENCES = {"SEC", "ACC", "Big Ten", "Big 10", "Big 12"}
 G6_CONFERENCES = {"American Athletic", "Conference USA", "Mid-American", "Mountain West", "Pac-12", "Pac 12", "Sun Belt"}
 INDEPENDENT_CONFERENCES = {"FBS Independents", "Independent", "Independents"}
@@ -1896,7 +1897,7 @@ scope_col, mode_control_col, map_control_col = st.columns([1.25, 1, 2.35])
 with scope_col:
     map_scope = st.radio(
         "Map Scope",
-        ["Power 4 + Notre Dame", "G6 + UConn"],
+        ["Power 4 + Notre Dame", "G6 + UConn", ALL_MAP_SCOPE],
         horizontal=False,
     )
 with mode_control_col:
@@ -1911,11 +1912,13 @@ if map_scope == "Power 4 + Notre Dame":
         teams["conference"].isin(POWER_FOUR_CONFERENCES)
         | teams["team_key"].isin(NOTRE_DAME_TEAM_KEYS)
     ].copy()
-else:
+elif map_scope == "G6 + UConn":
     map_teams = teams[
         teams["conference"].isin(G6_CONFERENCES)
         | teams["team_key"].isin(UCONN_TEAM_KEYS)
     ].copy()
+else:
+    map_teams = teams.copy()
 
 map_team_names = set(map_teams["team_key"])
 map_schedule = schedule[
