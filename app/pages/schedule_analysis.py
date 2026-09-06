@@ -11,6 +11,14 @@ from utils.db import read_df
 
 ET_TZ = "America/New_York"
 FBS_FILTER = "homeclassification = 'fbs' AND awayclassification = 'fbs'"
+PPA_STATS_COLUMNS = [
+    "game_id",
+    "team_key",
+    "offense_ppa",
+    "defense_ppa",
+    "offense_ppa_percentile",
+    "defense_ppa_percentile",
+]
 POWER_FOUR_CONFERENCES = {"SEC", "ACC", "Big Ten", "Big 10", "Big 12"}
 G6_CONFERENCES = {"American Athletic", "Conference USA", "Mid-American", "Mountain West", "Pac-12", "Pac 12", "Sun Belt"}
 INDEPENDENT_CONFERENCES = {"FBS Independents", "Independent", "Independents"}
@@ -442,6 +450,62 @@ def get_available_seasons() -> list[int]:
         """
     )
     return df["season"].astype(int).tolist() if not df.empty else []
+
+
+@st.cache_data(ttl=300)
+def get_team_game_ppa_stats(season: int) -> pd.DataFrame:
+    stat_columns = get_table_columns("team_advanced_game_stats")
+    required_columns = {"game_id", "team", "offense_ppa", "defense_ppa"}
+    if not required_columns.issubset(stat_columns):
+        return pd.DataFrame(columns=PPA_STATS_COLUMNS)
+
+    fbs_filter = FBS_FILTER.replace("homeclassification", "gd.homeclassification").replace(
+        "awayclassification",
+        "gd.awayclassification",
+    )
+
+    df = read_df(
+        f"""
+        SELECT
+            gs.game_id::text AS game_id,
+            gs.team,
+            gs.offense_ppa::float AS offense_ppa,
+            gs.defense_ppa::float AS defense_ppa
+        FROM public.team_advanced_game_stats gs
+        JOIN public.game_data gd
+          ON gd.id::text = gs.game_id::text
+        WHERE gd.season = :season
+          AND {fbs_filter}
+          AND gs.team IS NOT NULL
+          AND (gs.offense_ppa IS NOT NULL OR gs.defense_ppa IS NOT NULL)
+        """,
+        {"season": int(season)},
+    )
+    if df.empty:
+        return pd.DataFrame(columns=PPA_STATS_COLUMNS)
+
+    df = df.copy()
+    df["game_id"] = df["game_id"].map(normalize_id)
+    df["team_key"] = df["team"].map(team_key)
+    df = df.drop_duplicates(subset=["game_id", "team_key"], keep="first")
+    for col in ["offense_ppa", "defense_ppa"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["offense_ppa_percentile"] = np.nan
+    df["defense_ppa_percentile"] = np.nan
+
+    offense_values = df["offense_ppa"].dropna()
+    if not offense_values.empty:
+        df.loc[df["offense_ppa"].notna(), "offense_ppa_percentile"] = (
+            df.loc[df["offense_ppa"].notna(), "offense_ppa"].rank(pct=True) * 100
+        )
+
+    defense_values = df["defense_ppa"].dropna()
+    if not defense_values.empty:
+        df.loc[df["defense_ppa"].notna(), "defense_ppa_percentile"] = (
+            (-df.loc[df["defense_ppa"].notna(), "defense_ppa"]).rank(pct=True) * 100
+        )
+
+    return df[PPA_STATS_COLUMNS]
 
 
 def prediction_margin_sql(prediction_columns: set[str]) -> str:
@@ -1524,7 +1588,9 @@ def weekly_team_rows(games: pd.DataFrame) -> pd.DataFrame:
 
     home_rows = pd.DataFrame(
         {
+            "game_id": completed["game_id"],
             "team": completed["hometeam"],
+            "team_key": completed["hometeam_key"],
             "opponent": completed["awayteam"],
             "logo": completed.get("home_logo"),
             "points_for": completed["homepoints"],
@@ -1538,7 +1604,9 @@ def weekly_team_rows(games: pd.DataFrame) -> pd.DataFrame:
     )
     away_rows = pd.DataFrame(
         {
+            "game_id": completed["game_id"],
             "team": completed["awayteam"],
+            "team_key": completed["awayteam_key"],
             "opponent": completed["hometeam"],
             "logo": completed.get("away_logo"),
             "points_for": completed["awaypoints"],
@@ -1551,7 +1619,17 @@ def weekly_team_rows(games: pd.DataFrame) -> pd.DataFrame:
         }
     )
     rows = pd.concat([home_rows, away_rows], ignore_index=True)
+    if "season" in completed.columns:
+        season_values = completed["season"].dropna()
+        if not season_values.empty:
+            ppa_stats = get_team_game_ppa_stats(int(season_values.iloc[0]))
+            if not ppa_stats.empty:
+                rows = rows.merge(ppa_stats, on=["game_id", "team_key"], how="left")
     for col in ["points_for", "points_against", "win_probability", "projected_mov", "actual_mov"]:
+        rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    for col in ["offense_ppa", "defense_ppa", "offense_ppa_percentile", "defense_ppa_percentile"]:
+        if col not in rows.columns:
+            rows[col] = np.nan
         rows[col] = pd.to_numeric(rows[col], errors="coerce")
     missing_projected_mov = rows["projected_mov"].isna() & rows["win_probability"].notna()
     rows.loc[missing_projected_mov, "projected_mov"] = implied_margin_from_probability(
@@ -1622,12 +1700,13 @@ def render_awards(games: pd.DataFrame, bg_team: str, season_schedule: pd.DataFra
 
     if not rows.empty:
         rows["award_win_probability"] = rows["win_probability"].fillna(0.5).clip(0.01, 0.99)
-        rows["offense_score"] = rows["points_for"] * (1 - rows["award_win_probability"])
+        rows["difficulty_multiplier"] = 0.75 + ((1 - rows["award_win_probability"]) * 0.5)
+        rows["offense_score"] = rows["offense_ppa_percentile"] * rows["difficulty_multiplier"]
     best_offense = first_team_award(
         rows,
         ~rows["vs_fcs"],
-        ["offense_score", "points_for", "award_win_probability"],
-        [False, False, True],
+        ["offense_score", "offense_ppa_percentile", "offense_ppa"],
+        [False, False, False],
     ) if not rows.empty else None
     cards.append(
         award_card_html(
@@ -1635,23 +1714,20 @@ def render_awards(games: pd.DataFrame, bg_team: str, season_schedule: pd.DataFra
             "Best Offense",
             safe_text(best_offense.get("team")) if best_offense is not None else "",
             (
-                f"{int(best_offense.points_for)} pts vs {safe_text(best_offense.opponent)} | "
-                f"{best_offense.win_probability:.1%} win prob"
-            ) if best_offense is not None and pd.notna(best_offense.win_probability) else (
-                f"{int(best_offense.points_for)} pts vs {safe_text(best_offense.opponent)}" if best_offense is not None else ""
-            ),
+                f"Adj PPA {best_offense.offense_score:.1f} | "
+                f"{best_offense.award_win_probability:.1%} win prob"
+            ) if best_offense is not None else "",
             best_offense.get("logo") if best_offense is not None else None,
         )
     )
 
     if not rows.empty:
-        rows["defense_shutout"] = rows["points_against"].eq(0)
-        rows["defense_score"] = (1 - rows["award_win_probability"]) / (rows["points_against"] + 1)
+        rows["defense_score"] = rows["defense_ppa_percentile"] * rows["difficulty_multiplier"]
     best_defense = first_team_award(
         rows,
         ~rows["vs_fcs"],
-        ["defense_shutout", "defense_score", "points_against", "award_win_probability", "points_for"],
-        [False, False, True, True, False],
+        ["defense_score", "defense_ppa_percentile", "defense_ppa"],
+        [False, False, True],
     ) if not rows.empty else None
     cards.append(
         award_card_html(
@@ -1659,11 +1735,9 @@ def render_awards(games: pd.DataFrame, bg_team: str, season_schedule: pd.DataFra
             "Best Defense",
             safe_text(best_defense.get("team")) if best_defense is not None else "",
             (
-                f"Allowed {int(best_defense.points_against)} vs {safe_text(best_defense.opponent)} | "
-                f"{best_defense.win_probability:.1%} win prob"
-            ) if best_defense is not None and pd.notna(best_defense.win_probability) else (
-                f"Allowed {int(best_defense.points_against)} vs {safe_text(best_defense.opponent)}" if best_defense is not None else ""
-            ),
+                f"Adj PPA {best_defense.defense_score:.1f} | "
+                f"{best_defense.award_win_probability:.1%} win prob"
+            ) if best_defense is not None else "",
             best_defense.get("logo") if best_defense is not None else None,
         )
     )
@@ -1684,23 +1758,34 @@ def render_awards(games: pd.DataFrame, bg_team: str, season_schedule: pd.DataFra
     if not rows.empty:
         rows["loss_margin"] = -rows["actual_mov"]
         rows["overperformance"] = rows["actual_mov"] - rows["projected_mov"]
-        rows["good_fight_score"] = rows["overperformance"] - (rows["loss_margin"] * 0.25)
-    good_fight = first_team_award(
+        rows["almost_famous_score"] = (
+            rows["overperformance"]
+            + ((1 - rows["award_win_probability"]) * 20)
+            - (rows["loss_margin"] * 0.75)
+        )
+        almost_famous_mask = (
+            (~rows["won"])
+            & rows["award_win_probability"].le(0.45)
+            & rows["loss_margin"].le(14)
+            & rows["overperformance"].gt(0)
+        )
+    almost_famous = first_team_award(
         rows,
-        (~rows["won"]) & rows["overperformance"].gt(0) & rows["loss_margin"].le(21),
-        ["good_fight_score", "loss_margin", "win_probability"],
+        almost_famous_mask,
+        ["almost_famous_score", "loss_margin", "win_probability"],
         [False, True, True],
     ) if not rows.empty else None
     cards.append(
         award_card_html(
             7,
-            "Good Fight",
-            safe_text(good_fight.get("team")) if good_fight is not None else "",
+            "Almost Did It",
+            safe_text(almost_famous.get("team")) if almost_famous is not None else "",
             (
-                f"Lost by {int(good_fight.loss_margin)} | "
-                f"+{good_fight.overperformance:.1f} vs projection"
-            ) if good_fight is not None else "",
-            good_fight.get("logo") if good_fight is not None else None,
+                f"Lost by {int(almost_famous.loss_margin)} | "
+                f"+{almost_famous.overperformance:.1f} vs proj | "
+                f"{almost_famous.win_probability:.1%} win prob"
+            ) if almost_famous is not None and pd.notna(almost_famous.win_probability) else "",
+            almost_famous.get("logo") if almost_famous is not None else None,
         )
     )
 
