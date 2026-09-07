@@ -463,6 +463,91 @@ def get_poll_rankings(poll: str, season: int, week: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
+def get_teamrankings_snapshot(season: int, as_of_date: date | None) -> pd.DataFrame:
+    if not isinstance(season, int):
+        return pd.DataFrame()
+
+    table_columns = get_table_columns("teamrankings_predictive_ratings")
+    required_columns = {"season", "pull_date", "team", "rating"}
+    if not required_columns.issubset(table_columns):
+        return pd.DataFrame()
+
+    date_filter = "AND pull_date <= :as_of_date" if as_of_date is not None else ""
+    df = read_df(
+        f"""
+        SELECT DISTINCT ON (team)
+            team,
+            rank::int AS teamrankings_rank,
+            rating::float AS teamrankings_rating,
+            pull_date AS teamrankings_pull_date
+        FROM public.teamrankings_predictive_ratings
+        WHERE season = :season
+          AND rating IS NOT NULL
+          {date_filter}
+        ORDER BY team, pull_date DESC
+        """,
+        {"season": int(season), "as_of_date": as_of_date},
+    )
+    if df.empty:
+        return df
+    df["teamrankings_rating"] = pd.to_numeric(df["teamrankings_rating"], errors="coerce")
+    return df.dropna(subset=["team", "teamrankings_rating"])
+
+
+def blend_power_with_teamrankings(
+    power_df: pd.DataFrame,
+    season: int | None,
+    as_of_date: date | None,
+    teamrankings_weight: float,
+) -> pd.DataFrame:
+    if power_df.empty or not isinstance(season, int):
+        return power_df
+
+    out = power_df.copy()
+    out["raw_power_rating"] = pd.to_numeric(out["power_rating"], errors="coerce")
+    out["teamrankings_blend_weight"] = float(teamrankings_weight)
+    if teamrankings_weight <= 0:
+        out["rank"] = out["raw_power_rating"].rank(method="first", ascending=False).astype(int)
+        return out.sort_values(["rank", "team"]).reset_index(drop=True)
+
+    teamrankings = get_teamrankings_snapshot(season, as_of_date)
+    if teamrankings.empty:
+        out["rank"] = out["raw_power_rating"].rank(method="first", ascending=False).astype(int)
+        return out.sort_values(["rank", "team"]).reset_index(drop=True)
+
+    out = out.merge(teamrankings, on="team", how="left")
+    shared = out["raw_power_rating"].notna() & out["teamrankings_rating"].notna()
+    if shared.sum() < 2:
+        out["power_rating"] = out["raw_power_rating"]
+        out["rank"] = out["power_rating"].rank(method="first", ascending=False).astype(int)
+        return out.sort_values(["rank", "team"]).reset_index(drop=True)
+
+    bg_mean = out.loc[shared, "raw_power_rating"].mean()
+    bg_std = out.loc[shared, "raw_power_rating"].std(ddof=0)
+    tr_mean = out.loc[shared, "teamrankings_rating"].mean()
+    tr_std = out.loc[shared, "teamrankings_rating"].std(ddof=0)
+    if pd.isna(bg_std) or pd.isna(tr_std) or bg_std == 0 or tr_std == 0:
+        out["power_rating"] = out["raw_power_rating"]
+        out["rank"] = out["power_rating"].rank(method="first", ascending=False).astype(int)
+        return out.sort_values(["rank", "team"]).reset_index(drop=True)
+
+    out["teamrankings_scaled_rating"] = (
+        ((out["teamrankings_rating"] - tr_mean) / tr_std) * bg_std
+    ) + bg_mean
+    out["power_rating"] = (
+        (1.0 - teamrankings_weight) * out["raw_power_rating"]
+        + teamrankings_weight * out["teamrankings_scaled_rating"]
+    )
+    out["power_rating"] = out["power_rating"].where(
+        out["teamrankings_scaled_rating"].notna(),
+        out["raw_power_rating"],
+    )
+    out = out.sort_values(["power_rating", "team"], ascending=[False, True]).reset_index(drop=True)
+    out["rank"] = np.arange(1, len(out) + 1)
+    return out
+
+
+@st.cache_data(ttl=300)
 def get_power_rating_seasons() -> list[int]:
     df = read_df(
         f"""
@@ -1052,6 +1137,17 @@ def format_date(value) -> str:
     return "NA" if pd.isna(parsed) else parsed.strftime("%b %-d, %Y")
 
 
+def format_blend_meta(df: pd.DataFrame, teamrankings_weight: float) -> str:
+    if teamrankings_weight <= 0:
+        return "BG only"
+    if (
+        "teamrankings_scaled_rating" not in df.columns
+        or df["teamrankings_scaled_rating"].notna().sum() < 2
+    ):
+        return "BG only"
+    return f"{teamrankings_weight:.0%} TeamRankings blend"
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
     return slug or "ratings"
@@ -1504,7 +1600,9 @@ available_polls = get_available_polls()
 poll_label_map = dict(available_polls)
 poll_options = list(poll_label_map.keys()) or ["No polls available"]
 
-control_a, control_b, control_c, control_d, control_e = st.columns([1.1, 1, 1, 1, 1])
+control_a, control_b, control_c, control_d, control_e, control_f = st.columns(
+    [1.1, 1, 1, 1, 1, 1.2]
+)
 
 with control_a:
     poll_label = st.selectbox(
@@ -1594,6 +1692,16 @@ with control_e:
             help="Seasons 2025 and earlier use the end-of-season calculation.",
         )
 
+with control_f:
+    teamrankings_blend_weight = st.slider(
+        "TeamRankings Blend",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.5,
+        step=0.05,
+        help="0 = BG Power only. 1 = TeamRankings only, standardized to the BG Power scale.",
+    )
+
 poll_df = (
     get_poll_rankings(poll, poll_season, poll_week)
     if poll and isinstance(poll_season, int) and isinstance(poll_week, int)
@@ -1603,10 +1711,21 @@ if isinstance(power_season, int) and power_season >= 2026:
     power_df = get_snapshot_power_rankings(power_season, selected_rating_date)
 else:
     power_df = get_power_rankings(power_season) if isinstance(power_season, int) else pd.DataFrame()
+power_rating_as_of = (
+    selected_rating_date
+    if isinstance(power_season, int) and power_season >= 2026
+    else date.today()
+)
+power_df = blend_power_with_teamrankings(
+    power_df,
+    power_season if isinstance(power_season, int) else None,
+    power_rating_as_of,
+    teamrankings_blend_weight,
+)
 power_df = add_rating_context(
     power_df,
     power_season if isinstance(power_season, int) else None,
-    selected_rating_date if isinstance(power_season, int) and power_season >= 2026 else date.today(),
+    power_rating_as_of,
 )
 
 top_poll_team = poll_df.iloc[0]["team"] if not poll_df.empty else "NA"
@@ -1646,15 +1765,20 @@ st.markdown(
 poll_title = f"{poll_label or 'Official Poll'} Top 25"
 poll_meta = f"{poll_season or ''} | Week {poll_week or ''}".strip(" |")
 power_title = "BG Power Rating"
+blend_meta = format_blend_meta(power_df, teamrankings_blend_weight)
 if isinstance(power_season, int) and power_season >= 2026:
     snapshot_completed = (
         power_df["completed_at"].iloc[0]
         if not power_df.empty and "completed_at" in power_df.columns
         else selected_rating_date
     )
-    power_meta = f"{power_season or ''} | As of {format_date(snapshot_completed)}".strip(" |")
+    power_meta = (
+        f"{power_season or ''} | As of {format_date(snapshot_completed)} | {blend_meta}"
+    ).strip(" |")
 else:
-    power_meta = f"{power_season or ''} | End of season | MOV + {margin_source}".strip(" |")
+    power_meta = (
+        f"{power_season or ''} | End of season | MOV + {margin_source} | {blend_meta}"
+    ).strip(" |")
 
 list_a, list_b = st.columns(2)
 with list_a:
