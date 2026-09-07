@@ -141,6 +141,20 @@ st.markdown(
         gap: 0;
         padding: 6px 10px 10px 10px;
       }
+      .power-rating-scroll {
+        box-sizing: border-box;
+        max-height: 1366px;
+        overflow-y: auto;
+      }
+      .power-rating-scroll:focus-visible {
+        outline: 2px solid #2563eb;
+        outline-offset: -2px;
+      }
+      @media (max-width: 640px) {
+        .power-rating-scroll {
+          max-height: 70vh;
+        }
+      }
       .compact-row {
         display: grid;
         grid-template-columns: 38px 42px minmax(0, 1fr) auto;
@@ -1486,7 +1500,7 @@ def render_poll_list(df: pd.DataFrame, title: str, meta: str) -> None:
 
 def render_power_list(df: pd.DataFrame, title: str, meta: str) -> None:
     rows = []
-    for item in df.head(25).itertuples(index=False):
+    for item in df.itertuples(index=False):
         team = html.escape(str(item.team))
         logo = compact_logo_html(getattr(item, "logo", None), item.team)
         next_game = html.escape(str(getattr(item, "next_game_label", "No upcoming")))
@@ -1508,7 +1522,8 @@ def render_power_list(df: pd.DataFrame, title: str, meta: str) -> None:
         f"<div class='board-title'>{html.escape(title)}</div>"
         f"<div class='board-meta'>{html.escape(meta)}</div>"
         "</div>"
-        f"<div class='compact-list'>{body}</div>"
+        f"<div class='compact-list power-rating-scroll' role='region' "
+        f"aria-label='{html.escape(title)} rankings' tabindex='0'>{body}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
