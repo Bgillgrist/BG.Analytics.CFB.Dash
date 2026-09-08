@@ -1,6 +1,7 @@
 """League-wide season outlook, conference races, and snapshot changes."""
 
 import html
+from datetime import timedelta
 
 import pandas as pd
 import plotly.express as px
@@ -93,7 +94,7 @@ def render_teams(frame):
     metrics = [column for column in LABELS if column not in ("team", "conference")]
     chosen = st.multiselect("Projection columns", metrics, default=PRESETS[preset],
                             format_func=LABELS.get, key=f"prediction_columns_{preset}")
-    st.caption("Team and Conference stay visible. Add change columns using the comparison period above.")
+    st.caption("Team and Conference stay visible. Add change columns using the comparison date above.")
     first, second, third = st.columns([2, 2, 1])
     metric = first.selectbox("Numeric filter", [None, *metrics],
                              format_func=lambda value: "No numeric filter" if value is None else LABELS[value])
@@ -180,7 +181,7 @@ def render_conferences(frame):
 def render_changes(frame, previous):
     st.subheader("What’s changed")
     if previous is None:
-        st.info("No earlier successful snapshot is available for this comparison period.")
+        st.info("No earlier successful snapshot is available for the selected comparison date.")
         return
     st.caption("Probability changes are percentage points (pp), not relative percent changes. Teams without historical values show —.")
     available = frame.dropna(subset=["playoff_prob_change"])
@@ -211,12 +212,30 @@ if runs.empty:
 
 first, second = st.columns(2)
 season = first.selectbox("Season", sorted(runs["season"].unique(), reverse=True))
-period = second.selectbox("Compare with", ["Previous day", "One week earlier"])
 current = select_snapshot(runs, int(season))
 if current is None:
     st.info("No successful snapshot is available for this season.")
     st.stop()
-previous = comparison_snapshot(runs, current, 1 if period == "Previous day" else 7)
+current_date = pd.Timestamp(current["run_date"]).date()
+prior_dates = pd.to_datetime(runs.loc[runs["season"] == season, "run_date"]).dt.date
+prior_dates = prior_dates.loc[prior_dates < current_date]
+has_history = not prior_dates.empty
+first_comparison_date = prior_dates.min() if has_history else current_date
+last_comparison_date = current_date - timedelta(days=1) if has_history else current_date
+date_key = f"prediction_comparison_date_{season}"
+saved_date = st.session_state.get(date_key)
+if saved_date is not None and not first_comparison_date <= saved_date <= last_comparison_date:
+    st.session_state[date_key] = last_comparison_date
+comparison_date = second.date_input(
+    "Compare with date",
+    value=last_comparison_date,
+    min_value=first_comparison_date,
+    max_value=last_comparison_date,
+    disabled=not has_history,
+    key=date_key,
+    help="Choose an earlier date. If no snapshot exists that day, use the latest available snapshot on or before it.",
+)
+previous = comparison_snapshot(runs, current, comparison_date) if has_history else None
 try:
     frame = load_snapshot(str(current["season_prediction_run_id"]))
 except Exception:
@@ -239,9 +258,10 @@ date_label = pd.Timestamp(current["run_date"]).strftime("%b %d, %Y")
 st.caption(f"Snapshot: {date_label} · {int(current['simulations']):,} simulations · {len(frame)} FBS teams")
 if previous is not None:
     old_date = pd.Timestamp(previous["run_date"]).strftime("%b %d, %Y")
-    st.caption(f"Changes compare {date_label} with {old_date} (latest available snapshot on or before the requested date).")
+    requested_date = comparison_date.strftime("%b %d, %Y")
+    st.caption(f"Changes compare {date_label} with {old_date} · Requested date: {requested_date}. Using the latest available snapshot on or before that date.")
 else:
-    st.caption("Historical comparison unavailable for this period; change columns show —.")
+    st.caption("Historical comparison unavailable for the selected date; change columns show —.")
 if model_changed(current, previous):
     st.info("The model version changed between these snapshots. Differences may reflect model updates as well as new results and inputs.")
 with st.expander("Snapshot details & definitions"):

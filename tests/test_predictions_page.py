@@ -1,6 +1,7 @@
 """Streamlit interaction smoke tests; require the dashboard dependencies."""
 
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -52,6 +53,7 @@ def test_default_page_tabs_and_sort(page):
     assert [tab.label for tab in page.tabs] == ["Team Predictions", "Conference Races", "Changes"]
     assert page.dataframe[0].value["team"].tolist() == ["Alpha", "Bravo", "Independent"]
     assert not page.get("download_button")
+    assert widget(page.date_input, "Compare with date").value == date(2026, 9, 6)
 
 
 def test_filters_and_sort_do_not_change_conference_totals(page):
@@ -81,11 +83,12 @@ def test_presets_distribution_and_independents(page):
     assert not page.exception
 
 
-def test_week_comparison_discloses_model_change(page):
+def test_calendar_comparison_discloses_actual_snapshot_date_and_model_change(page):
     page.run()
-    widget(page.selectbox, "Compare with").select("One week earlier").run()
+    widget(page.date_input, "Compare with date").set_value(date(2026, 9, 2)).run()
     assert any("model version changed" in message.value for message in page.info)
     assert any("Aug 31, 2026" in caption.value for caption in page.caption)
+    assert any("Requested date: Sep 02, 2026" in caption.value for caption in page.caption)
     assert not page.exception
 
 

@@ -1,6 +1,6 @@
 """Read-only season snapshots and pure transformations for league predictions."""
 
-from datetime import timedelta
+from datetime import date
 
 import pandas as pd
 
@@ -81,8 +81,13 @@ def select_snapshot(runs: pd.DataFrame, season: int, cutoff=None) -> pd.Series |
                                 ascending=False, na_position="last").iloc[0].drop(labels="_id")
 
 
-def comparison_snapshot(runs: pd.DataFrame, current: pd.Series, days: int) -> pd.Series | None:
-    cutoff = pd.Timestamp(current["run_date"]).date() - timedelta(days=days)
+def comparison_snapshot(runs: pd.DataFrame, current: pd.Series, comparison_date: date | None) -> pd.Series | None:
+    """Find a prior snapshot on or before the calendar date, within this season."""
+    if comparison_date is None:
+        return None
+    cutoff = pd.Timestamp(comparison_date).date()
+    if cutoff >= pd.Timestamp(current["run_date"]).date():
+        return None
     return select_snapshot(runs, int(current["season"]), cutoff)
 
 

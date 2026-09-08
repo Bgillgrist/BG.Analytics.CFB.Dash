@@ -2,8 +2,10 @@
 BG.Analytics CFB Dashboard
 
 The **League Wide → Predictions** page reads successful manual/nightly season
-snapshots and provides sortable team projections, conference races, and day/week
-comparisons. It uses the same `NEON_DATABASE_URL` configuration as the other pages.
+snapshots and provides sortable team projections, conference races, and comparisons
+to a calendar date. If that day has no snapshot, the latest available snapshot on
+or before it is used, with the actual date displayed. It uses the same
+`NEON_DATABASE_URL` configuration as the other pages.
 
 Run prediction tests with `python -m pytest tests -q` after installing the dashboard
 requirements and pytest. Data tests run without Streamlit; the Streamlit interaction

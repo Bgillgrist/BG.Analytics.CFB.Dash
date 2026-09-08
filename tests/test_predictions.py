@@ -62,9 +62,13 @@ def test_comparison_excludes_same_day_and_uses_earlier_available_date():
         run("morning", "2026-09-07"), run("latest", "2026-09-07", "2026-09-07T20:00:00Z"),
     ])
     current = select_snapshot(runs, 2026)
-    assert comparison_snapshot(runs, current, 1)["season_prediction_run_id"] == "prior"
-    assert comparison_snapshot(runs, current, 7)["season_prediction_run_id"] == "old"
-    assert comparison_snapshot(runs, current, 30) is None
+    assert comparison_snapshot(runs, current, date(2026, 9, 6))["season_prediction_run_id"] == "prior"
+    assert comparison_snapshot(runs, current, date(2026, 8, 31))["season_prediction_run_id"] == "old"
+    assert comparison_snapshot(runs, current, date(2026, 8, 8)) is None
+    assert comparison_snapshot(runs, current, date(2026, 9, 5))["season_prediction_run_id"] == "prior"
+    assert comparison_snapshot(runs, current, date(2026, 9, 7)) is None
+    assert comparison_snapshot(runs, current, date(2026, 9, 8)) is None
+    assert comparison_snapshot(runs, current, None) is None
     assert select_snapshot(runs, 2026, date(2026, 9, 5))["season_prediction_run_id"] == "prior"
 
 
