@@ -7,6 +7,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from utils.db import read_df
+from utils.schedule_awards import build_award_shortlists, shortlist_table
 
 
 ET_TZ = "America/New_York"
@@ -159,81 +160,6 @@ st.markdown(
         margin: 0 0 8px 0;
         color: #0f172a;
       }
-      .award-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-      }
-      .award-card {
-        min-height: 150px;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        background: #ffffff;
-        padding: 12px;
-        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: space-between;
-        text-align: center;
-      }
-      .award-name {
-        font-size: 14px;
-        font-weight: 900;
-        color: #0f172a;
-        text-align: center;
-      }
-      .award-meta {
-        font-size: 11px;
-        color: #64748b;
-        line-height: 1.35;
-        margin-top: 6px;
-      }
-      .award-team-row {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        margin: 10px 0;
-        min-width: 0;
-      }
-      .award-logo {
-        width: 58px;
-        height: 58px;
-        border-radius: 999px;
-        border: 1px solid #e2e8f0;
-        background: #ffffff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-        flex: 0 0 auto;
-      }
-      .award-logo img {
-        max-width: 84%;
-        max-height: 84%;
-        object-fit: contain;
-      }
-      .award-logo span {
-        font-size: 13px;
-        font-weight: 950;
-        color: #0f172a;
-      }
-      .award-value {
-        font-size: 11px;
-        color: #94a3b8;
-        line-height: 1.25;
-        margin-top: 4px;
-        text-align: center;
-      }
-      .award-matchup-logos {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        margin: 10px 0;
-      }
       .map-heading {
         display: flex;
         align-items: flex-end;
@@ -243,11 +169,7 @@ st.markdown(
       }
       @media (max-width: 900px) {
         .schedule-title { font-size: 34px; }
-        .award-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .map-heading { display: block; }
-      }
-      @media (max-width: 560px) {
-        .award-grid { grid-template-columns: 1fr; }
       }
     </style>
     """,
@@ -1561,45 +1483,6 @@ def checkbox_dropdown(label: str, options: list[str], key: str, all_label: str) 
     return [option for idx, option in enumerate(options) if st.session_state.get(f"{key}_{idx}", True)]
 
 
-def award_logo_html(url: object, team: object) -> str:
-    safe_team = html.escape(safe_text(team, "Team"))
-    if url is not None and not pd.isna(url) and str(url).strip():
-        return f'<div class="award-logo"><img src="{html.escape(str(url), quote=True)}" alt="{safe_team} logo" /></div>'
-    return f'<div class="award-logo"><span>{html.escape(initials(safe_team))}</span></div>'
-
-
-def award_card_html(
-    number: int,
-    award_name: str,
-    winner: str,
-    value: str = "",
-    logo: object = None,
-    matchup_logos: tuple[object, object, str, str] | None = None,
-) -> str:
-    if matchup_logos:
-        away_logo, home_logo, away_team, home_team = matchup_logos
-        logo_html = (
-            '<div class="award-matchup-logos">'
-            f"{award_logo_html(away_logo, away_team)}"
-            f"{award_logo_html(home_logo, home_team)}"
-            "</div>"
-        )
-    elif winner:
-        logo_html = f'<div class="award-team-row">{award_logo_html(logo, winner)}</div>'
-    else:
-        logo_html = '<div class="award-meta">No eligible result</div>'
-
-    meta = f'<div class="award-value">{html.escape(value)}</div>' if value else ""
-
-    return (
-        '<div class="award-card">'
-        f'<div class="award-name">{html.escape(award_name)}</div>'
-        f"{logo_html}"
-        f"{meta}"
-        "</div>"
-    )
-
-
 def weekly_team_rows(games: pd.DataFrame) -> pd.DataFrame:
     if games.empty:
         return pd.DataFrame()
@@ -1662,194 +1545,35 @@ def weekly_team_rows(games: pd.DataFrame) -> pd.DataFrame:
     return rows
 
 
-def first_team_award(rows: pd.DataFrame, mask: pd.Series, sort_columns: list[str], ascending: list[bool]) -> pd.Series | None:
-    candidates = rows[mask].dropna(subset=sort_columns).copy()
-    if candidates.empty:
-        return None
-    return candidates.sort_values(sort_columns, ascending=ascending).iloc[0]
-
-
-def team_logo_lookup(schedule: pd.DataFrame) -> dict[str, object]:
-    lookup: dict[str, object] = {}
-    for side in ["home", "away"]:
-        name_col = f"{side}team"
-        logo_col = f"{side}_logo"
-        if name_col not in schedule.columns or logo_col not in schedule.columns:
-            continue
-        for row in schedule[[name_col, logo_col]].dropna(subset=[name_col]).itertuples(index=False):
-            key = team_key(getattr(row, name_col))
-            if key and key not in lookup:
-                lookup[key] = getattr(row, logo_col)
-    return lookup
-
-
-def render_awards(games: pd.DataFrame, bg_team: str, season_schedule: pd.DataFrame) -> None:
+def render_awards(games: pd.DataFrame) -> None:
     rows = weekly_team_rows(games)
-    cards = []
-
-    biggest_winner = first_team_award(rows, rows["won"] & ~rows["vs_fcs"], ["actual_mov"], [False]) if not rows.empty else None
-    cards.append(
-        award_card_html(
-            1,
-            "Biggest Winner",
-            safe_text(biggest_winner.get("team")) if biggest_winner is not None else "",
-            f"W +{int(biggest_winner.actual_mov)} vs {safe_text(biggest_winner.opponent)}" if biggest_winner is not None else "",
-            biggest_winner.get("logo") if biggest_winner is not None else None,
-        )
-    )
-
-    biggest_upset = first_team_award(rows, rows["won"], ["win_probability"], [True]) if not rows.empty else None
-    cards.append(
-        award_card_html(
-            2,
-            "Biggest Upset",
-            safe_text(biggest_upset.get("team")) if biggest_upset is not None else "",
-            f"{biggest_upset.win_probability:.1%} win prob" if biggest_upset is not None and pd.notna(biggest_upset.win_probability) else "",
-            biggest_upset.get("logo") if biggest_upset is not None else None,
-        )
-    )
-
-    closest_win = first_team_award(rows, rows["won"], ["actual_mov", "win_probability"], [True, False]) if not rows.empty else None
-    cards.append(
-        award_card_html(
-            3,
-            "Closest Win",
-            safe_text(closest_win.get("team")) if closest_win is not None else "",
-            f"W +{int(closest_win.actual_mov)} vs {safe_text(closest_win.opponent)}" if closest_win is not None else "",
-            closest_win.get("logo") if closest_win is not None else None,
-        )
-    )
-
-    if not rows.empty:
-        rows["award_win_probability"] = rows["win_probability"].fillna(0.5).clip(0.01, 0.99)
-        rows["difficulty_multiplier"] = 0.75 + ((1 - rows["award_win_probability"]) * 0.5)
-        rows["offense_score"] = rows["offense_ppa_percentile"] * rows["difficulty_multiplier"]
-    best_offense = first_team_award(
-        rows,
-        ~rows["vs_fcs"],
-        ["offense_score", "offense_ppa_percentile", "offense_ppa"],
-        [False, False, False],
-    ) if not rows.empty else None
-    cards.append(
-        award_card_html(
-            4,
-            "Best Offense",
-            safe_text(best_offense.get("team")) if best_offense is not None else "",
-            (
-                f"Adj PPA {best_offense.offense_score:.1f} | "
-                f"{best_offense.award_win_probability:.1%} win prob"
-            ) if best_offense is not None else "",
-            best_offense.get("logo") if best_offense is not None else None,
-        )
-    )
-
-    if not rows.empty:
-        rows["defense_score"] = rows["defense_ppa_percentile"] * rows["difficulty_multiplier"]
-    best_defense = first_team_award(
-        rows,
-        ~rows["vs_fcs"],
-        ["defense_score", "defense_ppa_percentile", "defense_ppa"],
-        [False, False, True],
-    ) if not rows.empty else None
-    cards.append(
-        award_card_html(
-            5,
-            "Best Defense",
-            safe_text(best_defense.get("team")) if best_defense is not None else "",
-            (
-                f"Adj PPA {best_defense.defense_score:.1f} | "
-                f"{best_defense.award_win_probability:.1%} win prob"
-            ) if best_defense is not None else "",
-            best_defense.get("logo") if best_defense is not None else None,
-        )
-    )
-
-    if not rows.empty:
-        rows["under_gap"] = rows["projected_mov"] - rows["actual_mov"]
-    underwhelming = first_team_award(rows, rows["won"] & rows["under_gap"].gt(0), ["under_gap"], [False]) if not rows.empty else None
-    cards.append(
-        award_card_html(
-            6,
-            "Underwhelming",
-            safe_text(underwhelming.get("team")) if underwhelming is not None else "",
-            f"{underwhelming.under_gap:.1f} pts below projection" if underwhelming is not None else "",
-            underwhelming.get("logo") if underwhelming is not None else None,
-        )
-    )
-
-    if not rows.empty:
-        rows["loss_margin"] = -rows["actual_mov"]
-        rows["overperformance"] = rows["actual_mov"] - rows["projected_mov"]
-        rows["almost_famous_score"] = (
-            rows["overperformance"]
-            + ((1 - rows["award_win_probability"]) * 20)
-            - (rows["loss_margin"] * 0.75)
-        )
-        almost_famous_mask = (
-            (~rows["won"])
-            & rows["award_win_probability"].le(0.45)
-            & rows["loss_margin"].le(14)
-            & rows["overperformance"].gt(0)
-        )
-    almost_famous = first_team_award(
-        rows,
-        almost_famous_mask,
-        ["almost_famous_score", "loss_margin", "win_probability"],
-        [False, True, True],
-    ) if not rows.empty else None
-    cards.append(
-        award_card_html(
-            7,
-            "Almost Did It",
-            safe_text(almost_famous.get("team")) if almost_famous is not None else "",
-            (
-                f"Lost by {int(almost_famous.loss_margin)} | "
-                f"+{almost_famous.overperformance:.1f} vs proj | "
-                f"{almost_famous.win_probability:.1%} win prob"
-            ) if almost_famous is not None and pd.notna(almost_famous.win_probability) else "",
-            almost_famous.get("logo") if almost_famous is not None else None,
-        )
-    )
-
-    excitement_col = first_existing(set(games.columns), EXCITEMENT_COLUMNS)
-    exciting_game = None
-    if excitement_col:
-        exciting_candidates = games.copy()
-        exciting_candidates["_excitement"] = pd.to_numeric(exciting_candidates[excitement_col], errors="coerce")
-        exciting_candidates = exciting_candidates.dropna(subset=["_excitement"])
-        if not exciting_candidates.empty:
-            exciting_game = exciting_candidates.sort_values("_excitement", ascending=False).iloc[0]
-    if exciting_game is not None:
-        cards.append(
-            award_card_html(
-                8,
-                "Most Exciting",
-                safe_text(exciting_game.get("matchup")),
-                f"Excitement index: {float(exciting_game['_excitement']):.2f}",
-                matchup_logos=(
-                    exciting_game.get("away_logo"),
-                    exciting_game.get("home_logo"),
-                    safe_text(exciting_game.get("awayteam")),
-                    safe_text(exciting_game.get("hometeam")),
-                ),
-            )
-        )
-    else:
-        cards.append(award_card_html(8, "Most Exciting", "", ""))
-
-    bg_team = bg_team.strip()
-    lookup = team_logo_lookup(season_schedule)
-    cards.append(
-        award_card_html(
-            9,
-            "BG.Analytics Team of the Week",
-            bg_team,
-            "",
-            lookup.get(team_key(bg_team)),
-        )
-    )
-
-    st.markdown(f'<div class="award-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
+    excitement_column = first_existing(set(games.columns), EXCITEMENT_COLUMNS)
+    shortlists = build_award_shortlists(rows, games, excitement_column)
+    st.caption("Top five candidates under the existing award rules, based on the selected week and conference filters. These are suggestions; you choose the winners for your graphic.")
+    for award in shortlists:
+        with st.expander(f"{award.name} · {len(award.candidates)} candidates", expanded=True):
+            st.caption(award.explanation)
+            table = shortlist_table(award)
+            if table.empty:
+                st.info("No eligible candidates with the required stats for this award.")
+                continue
+            config = {"Candidate rank": st.column_config.NumberColumn("Candidate rank", format="%d")}
+            for field, label in award.metrics.items():
+                if field == "win_probability":
+                    number_format = "%.1f%%"
+                elif field in ("offense_ppa", "defense_ppa"):
+                    number_format = "%.3f"
+                elif field == "_excitement":
+                    number_format = "%.2f"
+                else:
+                    number_format = "%.1f"
+                config[label] = st.column_config.NumberColumn(label, format=number_format)
+            st.dataframe(table, hide_index=True, use_container_width=True,
+                         height=38 + 35 * len(table), column_config=config)
+            if award.name in ("Best Offense", "Best Defense"):
+                st.caption("Award score = PPA percentile × [0.75 + (1 − win probability) × 0.5]. The existing formula uses 50% when probability is missing and limits it to 1–99%.")
+            elif award.name == "Almost Did It":
+                st.caption("Award score = points above projection + (1 − win probability) × 20 − loss margin × 0.75.")
 
 
 st.markdown(
@@ -1885,22 +1609,20 @@ conferences = sorted(
 with conf_col:
     selected_conferences = checkbox_dropdown("Conferences", conferences, "schedule_focus_conferences", "All conferences")
 
-left, right = st.columns([1.35, 1])
 week_games = filtered_week_games(schedule, selected_week, selected_conferences)
 
-with left:
-    st.markdown('<div class="panel-title">Weekly Schedule</div>', unsafe_allow_html=True)
-    st.dataframe(
-        weekly_table(schedule, selected_week, selected_conferences),
-        hide_index=True,
-        use_container_width=True,
-        height=455,
-    )
+st.markdown('<div class="panel-title">Weekly Schedule</div>', unsafe_allow_html=True)
+st.dataframe(
+    weekly_table(schedule, selected_week, selected_conferences),
+    hide_index=True,
+    use_container_width=True,
+    height=455,
+)
 
-with right:
-    st.markdown('<div class="panel-title">Weekly Awards</div>', unsafe_allow_html=True)
-    bg_team_of_week = st.text_input("BG.Analytics Team of the Week", value="", key=f"bg_team_of_week_{selected_season}")
-    render_awards(week_games, bg_team_of_week, schedule)
+st.markdown('<div class="panel-title">Weekly Award Candidates</div>', unsafe_allow_html=True)
+bg_team_of_week = st.text_input("BG.Analytics Team of the Week", value="", key=f"bg_team_of_week_{selected_season}")
+st.caption("Your manual choice. Use the shortlists below to decide the other winners.")
+render_awards(week_games)
 
 st.markdown(
     """
