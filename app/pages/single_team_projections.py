@@ -1023,11 +1023,57 @@ def win_probability_style(probability: float) -> str:
     return f"background-color: rgb({red}, {green}, {blue}); color: {text_color};"
 
 
-def style_win_probability_table(df: pd.DataFrame):
-    styled = df.style.format({"Win Probability": lambda x: "NA" if pd.isna(x) else f"{x:.1%}"})
-    if hasattr(styled, "map"):
-        return styled.map(win_probability_style, subset=["Win Probability"])
-    return styled.applymap(win_probability_style, subset=["Win Probability"])
+def build_season_games_table(games: pd.DataFrame, team: str):
+    """Display final results and projections with separate numeric color values."""
+    games = games.copy()
+    games["startdate"] = pd.to_datetime(games["startdate"], utc=True, errors="coerce")
+    games = games.sort_values("startdate", kind="stable", na_position="last").reset_index(drop=True)
+    start_et = games["startdate"].dt.tz_convert("America/New_York")
+    time_display = start_et.dt.strftime("%-I:%M %p").fillna("TBD")
+    start_time_tbd_col = first_existing(
+        set(games.columns), ["startTimeTBD", "starttimetbd", "start_time_tbd", "StartTimeTBD"]
+    )
+    if start_time_tbd_col:
+        time_display = time_display.mask(games[start_time_tbd_col].map(truthy), "TBD")
+
+    color_values = games["teamwinprob"].map(
+        lambda value: np.nan if pd.isna(value) else scale_probability(value)
+    )
+    display = pd.DataFrame(
+        {
+            "Date": start_et.dt.strftime("%m/%d/%Y").fillna("TBD"),
+            "Time": time_display,
+            "Home Team": games["hometeam"],
+            "Away Team": games["awayteam"],
+            "Win Probability": color_values.map(lambda value: "NA" if pd.isna(value) else f"{value:.1%}"),
+            "Model Version": games["model_version"].astype("object"),
+        }
+    )
+    for index, game in games.loc[games["completed"].map(truthy)].iterrows():
+        display.at[index, "Model Version"] = "Game Result"
+        display.at[index, "Win Probability"] = "NA"
+        color_values.at[index] = np.nan
+        home_points = pd.to_numeric(game["homepoints"], errors="coerce")
+        away_points = pd.to_numeric(game["awaypoints"], errors="coerce")
+        if pd.isna(home_points) or pd.isna(away_points):
+            continue
+
+        team_points, opponent_points = (
+            (home_points, away_points) if game["hometeam"] == team else (away_points, home_points)
+        )
+        if team_points > opponent_points:
+            result, color_value = "W", 1.0
+        elif team_points < opponent_points:
+            result, color_value = "L", 0.0
+        else:
+            result, color_value = "T", 0.5
+        color_values.at[index] = color_value
+        display.at[index, "Win Probability"] = f"{result} {int(team_points)}–{int(opponent_points)}"
+
+    return display.style.apply(
+        lambda column: color_values.reindex(column.index).map(win_probability_style),
+        subset=["Win Probability"],
+    )
 
 
 # ----------------------------
@@ -1087,8 +1133,6 @@ st.markdown(
 # Main content (only after team selected)
 # ----------------------------
 if selected_team:
-    now = pd.Timestamp.now(tz="UTC")
-
     # Team games + win probabilities
     prediction_table, prediction_columns = get_prediction_source()
     run_columns = get_table_columns("game_prediction_runs")
@@ -1121,17 +1165,10 @@ if selected_team:
         f"""
         {prediction_sql}
         WHERE g.season = :season
-          AND g.startdate IS NOT NULL
           AND (g.hometeam = :team OR g.awayteam = :team)
-          AND LOWER(COALESCE(g.seasontype, 'regular')) <> 'postseason'
         """,
         params={"team": selected_team, "season": current_season},
     )
-
-    team_games["startdate"] = pd.to_datetime(team_games["startdate"], utc=True)
-
-    # Upcoming games
-    upcoming_games = team_games[team_games["startdate"] > now].sort_values("startdate")
 
     # Season-long projections
     season_prediction = get_season_prediction(selected_team, current_season)
@@ -1151,40 +1188,9 @@ if selected_team:
     left_col, right_col = st.columns(2)
 
     with left_col:
-        st.subheader(f"Upcoming Games for {selected_team}")
-        upcoming_start_et = upcoming_games["startdate"].dt.tz_convert("America/New_York")
-        time_display = upcoming_start_et.dt.strftime("%-I:%M %p")
-        start_time_tbd_col = next(
-            (
-                col
-                for col in ["startTimeTBD", "starttimetbd", "start_time_tbd", "StartTimeTBD"]
-                if col in upcoming_games.columns
-            ),
-            None,
-        )
-        if start_time_tbd_col:
-            time_display = time_display.mask(upcoming_games[start_time_tbd_col].map(truthy), "TBD")
-        upcoming_display = (
-            upcoming_games.assign(
-                Date=upcoming_start_et.dt.strftime("%m/%d/%Y"),
-                Time=time_display,
-                win_probability=upcoming_games["teamwinprob"].map(
-                    lambda value: np.nan if pd.isna(value) else scale_probability(value)
-                ),
-            )[
-                ["Date", "Time", "hometeam", "awayteam", "win_probability", "model_version"]
-            ].rename(
-                columns={
-                    "hometeam": "Home Team",
-                    "awayteam": "Away Team",
-                    "win_probability": "Win Probability",
-                    "model_version": "Model Version",
-                }
-            )
-        )
-
+        st.subheader(f"Season Games for {selected_team}")
         st.dataframe(
-            style_win_probability_table(upcoming_display),
+            build_season_games_table(team_games, selected_team),
             hide_index=True,
             use_container_width=True,
         )
