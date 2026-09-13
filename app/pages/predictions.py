@@ -51,8 +51,13 @@ def display_table(frame, columns, key):
         elif column in RANKS:
             config[column] = st.column_config.NumberColumn(label, format="%d", help="Model projection, not an official ranking.")
         elif column.endswith("_change"):
-            suffix = "wins" if column == "projected_wins_change" else "pp"
-            config[column] = st.column_config.NumberColumn(label, format=f"%+.1f {suffix}")
+            if column == "projected_wins_change":
+                config[column] = st.column_config.NumberColumn(label, format="%+.1f wins")
+            else:
+                config[column] = st.column_config.NumberColumn(
+                    label, format="%+.1f%%",
+                    help="Difference from the comparison date: 20% to 30% is shown as +10%.",
+                )
         elif "strength_of_schedule" in column:
             config[column] = st.column_config.NumberColumn(label, format="%.3f", help="Model schedule-strength score. Higher means harder.")
         else:
@@ -104,7 +109,7 @@ def render_teams(frame):
     minimum = maximum = None
     if metric:
         scale = 100 if metric in PROBABILITIES else 1
-        st.caption("Enter percentages on a 0–100 scale; change columns use percentage points or wins. Blank bounds are unrestricted.")
+        st.caption("Enter probabilities on a 0–100 scale. For probability changes, 20% to 30% is +10. Win changes use wins. Blank bounds are unrestricted.")
         first, second = st.columns(2)
         minimum = first.number_input("Minimum", value=None, step=0.1, format="%.2f", key=f"prediction_min_{metric}")
         maximum = second.number_input("Maximum", value=None, step=0.1, format="%.2f", key=f"prediction_max_{metric}")
@@ -153,7 +158,10 @@ def render_conferences(frame):
         "conference": "Conference", "teams": st.column_config.NumberColumn("Teams", format="%d"),
         "favorite": "Title favorite", "favorite_prob": st.column_config.NumberColumn("Favorite %", format="%.1f%%"),
         "runner_up": "Runner-up", "runner_up_prob": st.column_config.NumberColumn("Runner-up %", format="%.1f%%"),
-        "lead_pp": st.column_config.NumberColumn("Favorite’s lead (pp)", format="%.1f pp"),
+        "lead_pp": st.column_config.NumberColumn(
+            "Favorite’s probability lead (%)", format="%.1f%%",
+            help="Difference between the top two title probabilities: 30% versus 20% is a 10% lead.",
+        ),
         "expected_cfp": st.column_config.NumberColumn("Expected CFP teams", format="%.2f"),
     }, key="prediction_conference_summary")
     conference = st.selectbox("Explore a conference", summary["conference"].tolist())
@@ -183,7 +191,7 @@ def render_changes(frame, previous):
     if previous is None:
         st.info("No earlier successful snapshot is available for the selected comparison date.")
         return
-    st.caption("Probability changes are percentage points (pp), not relative percent changes. Teams without historical values show —.")
+    st.caption("Changes show the difference between probabilities: 20% to 30% is +10%, and 30% to 20% is −10%. Teams without historical values show —.")
     available = frame.dropna(subset=["playoff_prob_change"])
     for container, positive, title in zip(st.columns(2), [True, False], ["Biggest CFP risers", "Biggest CFP fallers"]):
         with container:

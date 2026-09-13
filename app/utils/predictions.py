@@ -28,7 +28,7 @@ LABELS.update({column: f"Exactly {i} wins %" if i < 13 else "13+ wins %"
                for i, column in enumerate(WIN_BUCKETS)})
 LABELS.update({f"probability_{i}_plus_wins": f"{i}+ wins %" for i in (8, 10, 11, 12)})
 LABELS.update({f"{column}_change": LABELS[column].replace(" %", "") +
-               (" change (wins)" if column == "projected_wins" else " change (pp)")
+               (" change (wins)" if column == "projected_wins" else " change (%)")
                for column in CHANGE_METRICS})
 PROBABILITIES = {column for column in LABELS
                  if column.endswith("_prob") or column.startswith("probability_")}
