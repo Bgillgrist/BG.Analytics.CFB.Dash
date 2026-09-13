@@ -1,5 +1,6 @@
 import html
 import json
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
@@ -985,7 +986,6 @@ def build_county_conquest_map(
     ownership_histories: dict[str, list[dict[str, str]]],
     conference_assets: dict[str, dict[str, str]],
     source_label: str,
-    map_scope: str,
     map_mode: str,
     render_key: str,
     owner_teams: pd.DataFrame | None = None,
@@ -1052,8 +1052,6 @@ def build_county_conquest_map(
 
     seeds_json = json.dumps(seeds)
     source = html.escape(source_label)
-    map_scope_json = json.dumps(map_scope)
-    escaped_map_mode = html.escape(map_mode)
     escaped_render_key = html.escape(render_key)
 
     return f"""
@@ -1118,50 +1116,24 @@ def build_county_conquest_map(
       </div>
       <script>
         const seeds = {seeds_json};
-        const mapScope = {map_scope_json};
-        const mapMode = "{escaped_map_mode}";
-        const renderKey = "{escaped_render_key}";
         const width = 1200;
         const height = 760;
         const svg = d3.select("#county-map");
         const logoLayer = d3.select("#logo-layer");
         const tooltip = d3.select("#county-tooltip");
         const excludedStateIds = new Set(["60", "66", "69", "72", "78"]);
-        const logoScopeKey = String(mapScope || "default").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-        const logoStorageKey = `cfb-conquest-logo-positions-v6-${{logoScopeKey}}-${{mapMode.toLowerCase()}}`;
-
-        function getStoredLogoPositions() {{
-          try {{
-            return JSON.parse(window.localStorage.getItem(logoStorageKey) || "{{}}");
-          }} catch (_) {{
-            return {{}};
-          }}
-        }}
-
-        function setStoredLogoPosition(placementKey, x, y) {{
-          try {{
-            const positions = getStoredLogoPositions();
-            positions[placementKey] = {{ x, y }};
-            window.localStorage.setItem(logoStorageKey, JSON.stringify(positions));
-          }} catch (_) {{}}
-        }}
 
         function logoInitials(name) {{
           return String(name || "").split(" ").map(part => part[0]).join("").slice(0, 3).toUpperCase();
         }}
 
-        function drawLogo(logoInfo, x, y, count, options = {{}}) {{
-          const placementKey = options.placementKey || logoInfo.key;
-          const stored = options.useStored === false ? null : getStoredLogoPositions()[placementKey];
-          const startX = Number.isFinite(stored?.x) ? stored.x : x;
-          const startY = Number.isFinite(stored?.y) ? stored.y : y;
+        function drawLogo(logoInfo, x, y, count) {{
           const group = logoLayer.append("g")
             .attr("class", "draggable-logo")
-            .attr("transform", `translate(${{startX}},${{startY}})`)
+            .attr("transform", `translate(${{x}},${{y}})`)
             .datum({{
-              placementKey,
-              x: startX,
-              y: startY,
+              x,
+              y,
               radius: logoInfo.radius || 18,
               logoInfo,
               count
@@ -1197,8 +1169,7 @@ def build_county_conquest_map(
               d.logoInfo,
               Math.max(d.radius, Math.min(width - d.radius, d.x + d.radius * 1.6)),
               Math.max(d.radius, Math.min(height - d.radius, d.y + d.radius * 1.2)),
-              d.count,
-              {{ placementKey: `${{d.placementKey}}:copy:${{Date.now()}}`, useStored: false }}
+              d.count
             );
           }});
           group.call(
@@ -1212,9 +1183,8 @@ def build_county_conquest_map(
                 d.y = Math.max(d.radius, Math.min(height - d.radius, event.y));
                 d3.select(this).attr("transform", `translate(${{d.x}},${{d.y}})`);
               }})
-              .on("end", function (event, d) {{
+              .on("end", function () {{
                 d3.select(this).classed("dragging", false);
-                setStoredLogoPosition(d.placementKey, d.x, d.y);
               }})
           );
         }}
@@ -1421,7 +1391,7 @@ def build_county_conquest_map(
             if (!logoInfo) continue;
             const largestMass = largestContiguousMass(counties, countyNeighbors, path);
             const center = centerForCounties(largestMass);
-            if (center) drawLogo(logoInfo, center.x, center.y, counties.length, {{ placementKey: logoKey }});
+            if (center) drawLogo(logoInfo, center.x, center.y, counties.length);
           }}
         }}).catch(() => {{
           svg.append("rect").attr("width", width).attr("height", height).attr("fill", "#e5e7eb");
@@ -1699,14 +1669,14 @@ else:
         map_checkpoint,
         map_owner_teams,
     )
-    map_render_key = f"{selected_season}-{map_scope}-{map_checkpoint}-{map_mode}"
+    # Force a fresh iframe on each rerun, even when another page control changes.
+    map_render_key = f"{selected_season}-{map_scope}-{map_checkpoint}-{map_mode}-{uuid4().hex}"
     map_html = build_county_conquest_map(
         map_teams,
         owners,
         ownership_histories,
         conference_assets,
         f"{selected_season} | {map_scope} | {map_checkpoint} | {map_mode} territory map",
-        map_scope,
         map_mode,
         map_render_key,
         map_owner_teams,
