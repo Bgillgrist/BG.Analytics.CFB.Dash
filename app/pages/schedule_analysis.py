@@ -47,7 +47,7 @@ TEAM_LOGO_FONT_SIZE = 8
 # Add team names here when team territory mode should use the secondary color
 # from team_map instead of the primary color.
 USE_SECONDARY_COLOR_FOR_TEAMS = {
-    "Michigan",
+    "UCLA",
 }
 
 # Manually maintain conquest-map conference colors and logo PNG URLs here.
