@@ -48,6 +48,7 @@ TEAM_LOGO_FONT_SIZE = 8
 # from team_map instead of the primary color.
 USE_SECONDARY_COLOR_FOR_TEAMS = {
     "UCLA",
+    "Mississippi State",
 }
 
 # Manually maintain conquest-map conference colors and logo PNG URLs here.
@@ -642,8 +643,8 @@ def get_venue_map() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=300)
 def get_team_assets() -> pd.DataFrame:
+    # Reapply the current color overrides on every rerun; get_team_map caches the database read.
     team_map = get_team_map()
     if team_map.empty:
         return pd.DataFrame(columns=TEAM_ASSET_COLUMNS)
