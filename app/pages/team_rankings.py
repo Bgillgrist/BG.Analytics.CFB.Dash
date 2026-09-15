@@ -1,16 +1,16 @@
 import html
 from datetime import date
-from io import BytesIO
-import re
-import urllib.request
-import zipfile
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
 
 from utils.db import read_df
+from utils.rankings_analysis import (
+    blend_rating_snapshot, build_bubble_watch, build_poll_comparison, build_rank_movements,
+    comparison_date_bounds, disagreement_shortlists, movement_shortlists, ranked_teams,
+    resolve_rating_date, valid_comparison_date,
+)
 
 
 POLL_LABELS = {
@@ -328,6 +328,34 @@ st.markdown(
         line-height: 1.1;
         margin-top: 4px;
       }
+      .analysis-grid, .analysis-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin: 12px 0 22px;
+      }
+      .analysis-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .analysis-panel {
+        min-width: 0;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #0f172a;
+        overflow: hidden;
+      }
+      .analysis-panel h4 { margin: 0; padding: 14px 16px; font-size: 17px; background: #f8fafc; }
+      .analysis-panel h4.analysis-red { border-top: 3px solid #b91c1c; }
+      .analysis-panel h4.analysis-green { border-top: 3px solid #047857; }
+      .analysis-row { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding: 13px 16px; border-top: 1px solid #f1f5f9; }
+      .analysis-name { font-weight: 800; overflow-wrap: anywhere; }
+      .analysis-detail { color: #475569; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+      .analysis-change { margin-top: 3px; font-size: 13px; font-weight: 750; }
+      .analysis-red { color: #b91c1c; }
+      .analysis-green { color: #047857; }
+      .analysis-empty { margin: 0; padding: 16px; color: #64748b; }
+      @media (max-width: 640px) {
+        .analysis-grid, .analysis-metrics { grid-template-columns: minmax(0, 1fr); }
+      }
       @media (max-width: 900px) {
         .rankings-header { display: block; }
         .rankings-title { font-size: 34px; }
@@ -516,49 +544,8 @@ def blend_power_with_teamrankings(
 ) -> pd.DataFrame:
     if power_df.empty or not isinstance(season, int):
         return power_df
-
-    out = power_df.copy()
-    out["raw_power_rating"] = pd.to_numeric(out["power_rating"], errors="coerce")
-    out["teamrankings_blend_weight"] = float(teamrankings_weight)
-    if teamrankings_weight <= 0:
-        out["rank"] = out["raw_power_rating"].rank(method="first", ascending=False).astype(int)
-        return out.sort_values(["rank", "team"]).reset_index(drop=True)
-
-    teamrankings = get_teamrankings_snapshot(season, as_of_date)
-    if teamrankings.empty:
-        out["rank"] = out["raw_power_rating"].rank(method="first", ascending=False).astype(int)
-        return out.sort_values(["rank", "team"]).reset_index(drop=True)
-
-    out = out.merge(teamrankings, on="team", how="left")
-    shared = out["raw_power_rating"].notna() & out["teamrankings_rating"].notna()
-    if shared.sum() < 2:
-        out["power_rating"] = out["raw_power_rating"]
-        out["rank"] = out["power_rating"].rank(method="first", ascending=False).astype(int)
-        return out.sort_values(["rank", "team"]).reset_index(drop=True)
-
-    bg_mean = out.loc[shared, "raw_power_rating"].mean()
-    bg_std = out.loc[shared, "raw_power_rating"].std(ddof=0)
-    tr_mean = out.loc[shared, "teamrankings_rating"].mean()
-    tr_std = out.loc[shared, "teamrankings_rating"].std(ddof=0)
-    if pd.isna(bg_std) or pd.isna(tr_std) or bg_std == 0 or tr_std == 0:
-        out["power_rating"] = out["raw_power_rating"]
-        out["rank"] = out["power_rating"].rank(method="first", ascending=False).astype(int)
-        return out.sort_values(["rank", "team"]).reset_index(drop=True)
-
-    out["teamrankings_scaled_rating"] = (
-        ((out["teamrankings_rating"] - tr_mean) / tr_std) * bg_std
-    ) + bg_mean
-    out["power_rating"] = (
-        (1.0 - teamrankings_weight) * out["raw_power_rating"]
-        + teamrankings_weight * out["teamrankings_scaled_rating"]
-    )
-    out["power_rating"] = out["power_rating"].where(
-        out["teamrankings_scaled_rating"].notna(),
-        out["raw_power_rating"],
-    )
-    out = out.sort_values(["power_rating", "team"], ascending=[False, True]).reset_index(drop=True)
-    out["rank"] = np.arange(1, len(out) + 1)
-    return out
+    teamrankings = get_teamrankings_snapshot(season, as_of_date) if teamrankings_weight > 0 else pd.DataFrame()
+    return blend_rating_snapshot(power_df, teamrankings, teamrankings_weight)
 
 
 @st.cache_data(ttl=300)
@@ -1162,311 +1149,189 @@ def format_blend_meta(df: pd.DataFrame, teamrankings_weight: float) -> str:
     return f"{teamrankings_weight:.0%} TeamRankings blend"
 
 
-def slugify(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
-    return slug or "ratings"
+def format_position(value, missing: str = "UR") -> str:
+    return missing if pd.isna(value) else f"#{int(value)}"
 
 
-def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Helvetica.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
-
-
-def text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[int, int]:
-    box = draw.textbbox((0, 0), str(text), font=font)
-    return box[2] - box[0], box[3] - box[1]
-
-
-def draw_centered_text(
-    draw: ImageDraw.ImageDraw,
-    xy: tuple[float, float],
-    text: str,
-    font: ImageFont.ImageFont,
-    fill: str,
-) -> None:
-    box = draw.textbbox((0, 0), str(text), font=font)
-    width = box[2] - box[0]
-    height = box[3] - box[1]
-    draw.text(
-        (xy[0] - width / 2 - box[0], xy[1] - height / 2 - box[1]),
-        text,
-        font=font,
-        fill=fill,
+def analysis_row_html(team, logo, detail: str, change: str = "", tone: str = "") -> str:
+    return (
+        f"<div class='analysis-row'>{compact_logo_html(logo, team)}<div>"
+        f"<div class='analysis-name'>{html.escape(str(team))}</div>"
+        f"<div class='analysis-detail'>{html.escape(detail)}</div>"
+        f"<div class='analysis-change {tone}'>{html.escape(change)}</div></div></div>"
     )
 
 
-def truncate_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> str:
-    text = str(text)
-    if text_size(draw, text, font)[0] <= max_width:
-        return text
-    suffix = "..."
-    while text and text_size(draw, f"{text}{suffix}", font)[0] > max_width:
-        text = text[:-1]
-    return f"{text}{suffix}" if text else suffix
+def analysis_panel_html(title: str, rows: list[str], empty: str, tone: str = "") -> str:
+    body = "".join(rows) if rows else f"<p class='analysis-empty'>{html.escape(empty)}</p>"
+    return f"<section class='analysis-panel'><h4 class='{tone}'>{html.escape(title)}</h4>{body}</section>"
 
 
-def team_initials(team: str) -> str:
-    return "".join(part[0] for part in str(team).split()[:3]).upper()
+def render_analysis_pair(left: str, right: str) -> None:
+    st.markdown(f"<div class='analysis-grid'>{left}{right}</div>", unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_logo_bytes(url: str | None) -> bytes | None:
-    if pd.isna(url) or not str(url).strip():
-        return None
-    try:
-        request = urllib.request.Request(
-            str(url),
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        with urllib.request.urlopen(request, timeout=6) as response:
-            return response.read()
-    except Exception:
-        return None
+def comparison_rows(frame: pd.DataFrame, poll_label: str, *, show_gap: bool = False) -> list[str]:
+    rows = []
+    for row in frame.itertuples(index=False):
+        detail = (f"{poll_label} {format_position(row.poll_rank)} · Ratings {format_position(row.rating_rank, '—')}"
+                  f" · Rating {format_decimal(row.power_rating)}")
+        change, tone = "", ""
+        if show_gap and pd.notna(row.gap):
+            minimum = "At least " if row.gap_is_minimum else ""
+            places = int(abs(row.gap))
+            direction = "higher" if row.gap > 0 else "lower"
+            change = f"{minimum}{places} {'place' if places == 1 else 'places'} {direction} in the poll"
+            tone = "analysis-red" if row.gap > 0 else "analysis-green"
+        rows.append(analysis_row_html(row.team, row.logo, detail, change, tone))
+    return rows
 
 
-def get_logo_image(url: str | None, size: int) -> Image.Image | None:
-    logo_bytes = fetch_logo_bytes(url)
-    if not logo_bytes:
-        return None
-    try:
-        logo = Image.open(BytesIO(logo_bytes)).convert("RGBA")
-    except Exception:
-        return None
-
-    logo.thumbnail((size, size), Image.LANCZOS)
-    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-    x = (size - logo.width) // 2
-    y = (size - logo.height) // 2
-    canvas.alpha_composite(logo, (x, y))
-    return canvas
-
-
-def draw_logo_badge(
-    image: Image.Image,
-    draw: ImageDraw.ImageDraw,
-    center: tuple[float, float],
-    badge_size: int,
-    logo_url: str | None,
-    team: str,
-    font: ImageFont.ImageFont,
-) -> None:
-    x = int(center[0] - badge_size / 2)
-    y = int(center[1] - badge_size / 2)
-    draw.ellipse((x, y, x + badge_size, y + badge_size), fill="#eef2f7", outline="#dbe4ee", width=2)
-
-    logo = get_logo_image(logo_url, int(badge_size * 0.78))
-    if logo is not None:
-        lx = int(center[0] - logo.width / 2)
-        ly = int(center[1] - logo.height / 2)
-        image.paste(logo, (lx, ly), logo)
-        return
-
-    draw_centered_text(draw, center, team_initials(team), font, "#0f172a")
-
-
-def image_to_png_bytes(image: Image.Image) -> bytes:
-    output = BytesIO()
-    image.save(output, format="PNG", optimize=True)
-    return output.getvalue()
-
-
-def build_power_rankings_png(df: pd.DataFrame, title: str, meta: str) -> bytes:
-    width = 1080
-    height = 1080
-    margin = 44
-    gap = 12
-    header_h = 118
-    cols = 5
-    rows = 5
-    card_w = (width - margin * 2 - gap * (cols - 1)) // cols
-    card_h = (height - margin * 2 - header_h - gap * (rows - 1)) // rows
-
-    image = Image.new("RGB", (width, height), "#f8fafc")
-    draw = ImageDraw.Draw(image)
-    title_font = load_font(44, bold=True)
-    meta_font = load_font(19)
-    rank_font = load_font(23, bold=True)
-    team_font = load_font(21, bold=True)
-    sub_font = load_font(15)
-    rating_font = load_font(24, bold=True)
-
-    draw.text((margin, 34), title, font=title_font, fill="#0f172a")
-    draw.text((margin, 86), meta, font=meta_font, fill="#64748b")
-    draw.text((width - margin - 204, 48), "@BG.Analytics", font=load_font(24, bold=True), fill="#0f172a")
-
-    for idx, item in enumerate(df.head(25).itertuples(index=False)):
-        row = idx // cols
-        col = idx % cols
-        x = margin + col * (card_w + gap)
-        y = margin + header_h + row * (card_h + gap)
-        draw.rounded_rectangle((x, y, x + card_w, y + card_h), radius=16, fill="#ffffff", outline="#dbe4ee", width=2)
-
-        rank = int(getattr(item, "rank"))
-        team = str(getattr(item, "team"))
-        logo_url = getattr(item, "logo", None)
-        rating = float(getattr(item, "power_rating"))
-        draw.ellipse((x + 14, y + 14, x + 52, y + 52), fill="#0f172a")
-        draw_centered_text(draw, (x + 33, y + 33), str(rank), rank_font, "#ffffff")
-        draw.text((x + card_w - 74, y + 18), f"{rating:+.1f}", font=rating_font, fill="#0f172a")
-
-        draw_logo_badge(
-            image,
-            draw,
-            (x + card_w / 2, y + 78),
-            58,
-            logo_url,
-            team,
-            load_font(18, bold=True),
-        )
-
-        team_label = truncate_text(draw, team, team_font, card_w - 22)
-        draw_centered_text(draw, (x + card_w / 2, y + 122), team_label, team_font, "#0f172a")
-        next_game = str(getattr(item, "next_game_label", "No upcoming"))
-        next_game_label = truncate_text(draw, next_game, sub_font, card_w - 24)
-        draw_centered_text(draw, (x + card_w / 2, y + 147), next_game_label, sub_font, "#64748b")
-
-    return image_to_png_bytes(image)
-
-
-def build_poll_comparison_df(poll_df: pd.DataFrame, power_df: pd.DataFrame) -> pd.DataFrame:
-    poll_export_cols = [col for col in ["team", "rank", "logo"] if col in poll_df.columns]
-    power_export_cols = [col for col in ["team", "rank", "power_rating", "logo"] if col in power_df.columns]
-    poll_cols = (
-        poll_df[poll_export_cols].rename(columns={"rank": "poll_rank", "logo": "poll_logo"}).copy()
-        if poll_export_cols
-        else pd.DataFrame()
-    )
-    power_cols = (
-        power_df[power_export_cols].rename(columns={"rank": "rating_rank", "logo": "rating_logo"}).copy()
-        if power_export_cols
-        else pd.DataFrame()
-    )
-    if poll_cols.empty and power_cols.empty:
-        return pd.DataFrame()
-    if poll_cols.empty:
-        poll_cols = pd.DataFrame(columns=["team", "poll_rank", "poll_logo"])
-    if power_cols.empty:
-        power_cols = pd.DataFrame(columns=["team", "rating_rank", "power_rating", "rating_logo"])
-
-    comparison = poll_cols.merge(power_cols, on="team", how="outer")
-    if "poll_logo" in comparison.columns and "rating_logo" in comparison.columns:
-        comparison["logo"] = comparison["poll_logo"].combine_first(comparison["rating_logo"])
-    elif "poll_logo" in comparison.columns:
-        comparison["logo"] = comparison["poll_logo"]
-    elif "rating_logo" in comparison.columns:
-        comparison["logo"] = comparison["rating_logo"]
+def render_snapshot_analysis(poll_df, power_df, poll_label, same_season):
+    official = ranked_teams(poll_df)
+    poll_available = official["rank"].le(25).any()
+    ratings_available = not ranked_teams(power_df).empty
+    comparable = same_season and poll_available and ratings_available
+    if not same_season:
+        st.info("Select matching poll and power-rating seasons to compare their rankings. Each list and its movement remain available below.")
+    elif not comparable:
+        st.info("A poll Top 25 and selected ratings are both needed for overrated, underrated, and agreement analysis.")
     else:
-        comparison["logo"] = None
-    comparison["poll_rank"] = pd.to_numeric(comparison["poll_rank"], errors="coerce")
-    comparison["rating_rank"] = pd.to_numeric(comparison["rating_rank"], errors="coerce")
-    comparison["poll_points"] = np.where(comparison["poll_rank"].notna(), 26 - comparison["poll_rank"], 0)
-    comparison["rating_points"] = np.where(comparison["rating_rank"].notna(), 26 - comparison["rating_rank"], 0)
-    comparison["poll_points"] = comparison["poll_points"].clip(0, 25).astype(int)
-    comparison["rating_points"] = comparison["rating_points"].clip(0, 25).astype(int)
-    comparison["gap"] = comparison["poll_points"] - comparison["rating_points"]
-    comparison["abs_gap"] = comparison["gap"].abs()
-    comparison = comparison[(comparison["poll_points"] > 0) | (comparison["rating_points"] > 0)]
-    return comparison.sort_values(["abs_gap", "poll_points", "rating_points"], ascending=[False, False, False])
+        comparison = build_poll_comparison(poll_df, power_df)
+        overrated, underrated = disagreement_shortlists(comparison)
+        st.caption("Overrated and underrated are relative to the selected ratings and blend. UR means outside the poll’s Top 25; gaps for UR teams are minimums.")
+        render_analysis_pair(
+            analysis_panel_html("Most overrated by the poll", comparison_rows(overrated, poll_label, show_gap=True),
+                                "No teams are ranked higher by the poll.", "analysis-red"),
+            analysis_panel_html("Most underrated by the poll", comparison_rows(underrated, poll_label, show_gap=True),
+                                "No teams are ranked lower by the poll.", "analysis-green"),
+        )
+        if comparison["rating_rank"].isna().any():
+            st.caption("Poll teams without a selected rating are excluded from rank-gap calculations.")
+
+        st.subheader("Top 25 agreement")
+        shared = int((comparison["in_poll"] & comparison["in_ratings"]).sum())
+        poll_only = comparison.loc[comparison["in_poll"] & ~comparison["in_ratings"]].sort_values(["poll_rank", "team"])
+        ratings_only = comparison.loc[comparison["in_ratings"] & ~comparison["in_poll"]].sort_values(["rating_rank", "team"])
+        st.write(f"The poll and selected ratings share {shared} Top 25 teams.")
+        tiles = "".join(
+            f"<div class='stat-tile'><div class='stat-label'>{label}</div><div class='stat-value'>{value}</div></div>"
+            for label, value in [("Shared Top 25", shared), ("Poll only", len(poll_only)), ("Ratings only", len(ratings_only))]
+        )
+        st.markdown(f"<div class='analysis-metrics'>{tiles}</div>", unsafe_allow_html=True)
+        render_analysis_pair(
+            analysis_panel_html("In the poll only", comparison_rows(poll_only, poll_label), "No teams appear only in the poll’s Top 25."),
+            analysis_panel_html("In the ratings only", comparison_rows(ratings_only, poll_label), "No teams appear only in the ratings’ Top 25."),
+        )
+
+    st.subheader("Bubble watch")
+    bubble = build_bubble_watch(power_df, poll_df if same_season and poll_available else None)
+    rows = []
+    for row in bubble.itertuples(index=False):
+        poll_position = format_position(row.poll_rank) if same_season and poll_available else "—"
+        detail = (f"Ratings #{int(row.rank)} · {poll_label} {poll_position} · Rating {format_decimal(row.power_rating)}"
+                  f" · {row.next_game_label if pd.notna(row.next_game_label) else 'Next game unavailable'}")
+        gap = (f"{row.points_to_top25:.1f} rating points behind #25"
+               if pd.notna(row.points_to_top25) else "Rating gap to #25 unavailable")
+        rows.append(analysis_row_html(row.team, row.logo, detail, gap))
+    st.markdown(analysis_panel_html("Just outside the ratings’ Top 25", rows, "Ratings #26–30 are unavailable for this selection."), unsafe_allow_html=True)
 
 
-def build_poll_comparison_png(comparison: pd.DataFrame, poll_title: str, power_title: str, meta: str) -> bytes:
-    width = 1080
-    height = 1080
-    margin = 44
-    row_h = 72
-    image = Image.new("RGB", (width, height), "#f8fafc")
-    draw = ImageDraw.Draw(image)
-
-    title_font = load_font(40, bold=True)
-    meta_font = load_font(18)
-    section_font = load_font(26, bold=True)
-    head_font = load_font(16, bold=True)
-    row_font = load_font(20, bold=True)
-    small_font = load_font(15)
-
-    draw.text((margin, 34), "Poll vs BG Analytics", font=title_font, fill="#0f172a")
-    draw.text((width - margin - 204, 48), "@BG.Analytics", font=load_font(24, bold=True), fill="#0f172a")
-    draw.text((margin, 84), meta, font=meta_font, fill="#64748b")
-    draw.text((margin, 112), "Top 5 overrated and underrated by shared Top 25 points", font=small_font, fill="#64748b")
-
-    overrated = comparison[comparison["gap"] > 0].sort_values(
-        ["gap", "poll_points", "rating_points"], ascending=[False, False, True]
-    ).head(5)
-    underrated = comparison[comparison["gap"] < 0].sort_values(
-        ["gap", "rating_points", "poll_points"], ascending=[True, False, True]
-    ).head(5)
-
-    def draw_section(section: pd.DataFrame, heading: str, y: int, accent: str) -> int:
-        draw.text((margin, y), heading, font=section_font, fill="#0f172a")
-        y += 42
-        draw.rounded_rectangle((margin, y, width - margin, y + 34), radius=8, fill="#0f172a")
-        draw.text((margin + 64, y + 9), "Team", font=head_font, fill="#ffffff")
-        draw.text((margin + 432, y + 9), poll_title, font=head_font, fill="#ffffff")
-        draw.text((margin + 642, y + 9), power_title, font=head_font, fill="#ffffff")
-        draw.text((width - margin - 120, y + 9), "Gap", font=head_font, fill="#ffffff")
-        y += 42
-
-        if section.empty:
-            draw.rounded_rectangle((margin, y, width - margin, y + row_h - 8), radius=8, fill="#ffffff", outline="#dbe4ee")
-            draw.text((margin + 18, y + 22), "No teams in this group.", font=row_font, fill="#64748b")
-            return y + row_h
-
-        for idx, item in enumerate(section.itertuples(index=False), start=1):
-            row_y = y + (idx - 1) * row_h
-            bg = "#ffffff" if idx % 2 else "#f1f5f9"
-            draw.rounded_rectangle((margin, row_y, width - margin, row_y + row_h - 8), radius=8, fill=bg)
-            draw_logo_badge(
-                image,
-                draw,
-                (margin + 32, row_y + 31),
-                42,
-                getattr(item, "logo", None),
-                str(item.team),
-                load_font(13, bold=True),
-            )
-
-            team = truncate_text(draw, str(item.team), row_font, 320)
-            poll_rank = "--" if pd.isna(item.poll_rank) else f"#{int(item.poll_rank)}"
-            rating_rank = "--" if pd.isna(item.rating_rank) else f"#{int(item.rating_rank)}"
-            poll_points = int(item.poll_points)
-            rating_points = int(item.rating_points)
-            gap = int(item.gap)
-
-            draw.text((margin + 64, row_y + 14), team, font=row_font, fill="#0f172a")
-            draw.text((margin + 64, row_y + 40), f"{'Over' if gap > 0 else 'Under'} by {abs(gap)} pts", font=small_font, fill=accent)
-
-            draw.text((margin + 432, row_y + 14), poll_rank, font=row_font, fill="#0f172a")
-            draw.text((margin + 432, row_y + 40), f"{poll_points} pts", font=small_font, fill="#64748b")
-
-            draw.text((margin + 642, row_y + 14), rating_rank, font=row_font, fill="#0f172a")
-            draw.text((margin + 642, row_y + 40), f"{rating_points} pts", font=small_font, fill="#64748b")
-
-            gap_text = f"{gap:+d}"
-            draw.text((width - margin - 116, row_y + 21), gap_text, font=load_font(24, bold=True), fill=accent)
-
-        return y + len(section) * row_h
-
-    next_y = draw_section(overrated, "Most Overrated By Poll", 152, "#b91c1c")
-    draw_section(underrated, "Most Underrated By Poll", next_y + 34, "#047857")
-
-    return image_to_png_bytes(image)
+def movement_rows(frame: pd.DataFrame, *, poll: bool, membership: str = "") -> list[str]:
+    rows = []
+    for row in frame.itertuples(index=False):
+        missing = "UR" if poll else "—"
+        detail = f"{format_position(row.previous_rank, missing)} → {format_position(row.current_rank, missing)}"
+        if not poll and pd.notna(row.rating_change):
+            detail += f" · Rating {row.previous_power_rating:.1f} → {row.current_power_rating:.1f} ({row.rating_change:+.1f})"
+        change, tone = membership, ""
+        if membership:
+            tone = "analysis-green" if row.entered_top25 else "analysis-red"
+        elif pd.notna(row.rank_change):
+            places = int(abs(row.rank_change))
+            change = f"{'↑' if row.rank_change > 0 else '↓'} {places} {'place' if places == 1 else 'places'}"
+            tone = "analysis-green" if row.rank_change > 0 else "analysis-red"
+        rows.append(analysis_row_html(row.team, row.logo, detail, change, tone))
+    return rows
 
 
-def build_png_zip(files: dict[str, bytes]) -> bytes:
-    output = BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, data in files.items():
-            archive.writestr(name, data)
-    return output.getvalue()
+def render_movement_panels(movement: pd.DataFrame, *, poll: bool) -> None:
+    risers, fallers = movement_shortlists(movement)
+    render_analysis_pair(
+        analysis_panel_html("Biggest risers", movement_rows(risers, poll=poll), "No rank increases in this comparison.", "analysis-green"),
+        analysis_panel_html("Biggest fallers", movement_rows(fallers, poll=poll), "No rank decreases in this comparison.", "analysis-red"),
+    )
+    entrants = movement.loc[movement["entered_top25"]].sort_values(["current_rank", "team"])
+    departures = movement.loc[movement["left_top25"]].sort_values(["previous_rank", "team"])
+    render_analysis_pair(
+        analysis_panel_html("Entered the Top 25", movement_rows(entrants, poll=poll, membership="New to the Top 25"), "No new Top 25 teams."),
+        analysis_panel_html("Left the Top 25", movement_rows(departures, poll=poll, membership="Dropped from the Top 25"), "No teams left the Top 25."),
+    )
+
+
+def render_poll_movement(poll_df, poll, poll_label, season, week, weeks):
+    if ranked_teams(poll_df).empty:
+        st.info("The selected poll is unavailable.")
+        return
+    earlier = [value for value in weeks if value < week]
+    if not earlier:
+        st.info("No earlier week is available for this poll and season.")
+        return
+    previous_week = max(earlier)
+    try:
+        previous = get_poll_rankings(poll, season, previous_week)
+    except Exception:
+        st.info("The earlier poll could not be loaded. Current rankings analysis remains available.")
+        return
+    if ranked_teams(previous).empty:
+        st.info("The earlier poll has no rankings available for comparison.")
+        return
+    st.caption(f"{poll_label} · {season} · Week {previous_week} → Week {week}. New and dropped teams have no exact rank change outside the Top 25.")
+    render_movement_panels(build_rank_movements(poll_df, previous, poll=True), poll=True)
+
+
+def render_ratings_movement(power_df, season, actual_date, run_dates, weight):
+    if not isinstance(season, int) or season < 2026:
+        st.info("Ratings movement is unavailable for 2025 and earlier: those seasons use an end-of-season calculation.")
+        return
+    if ranked_teams(power_df).empty:
+        st.info("The selected ratings are unavailable.")
+        return
+    bounds = comparison_date_bounds(run_dates, actual_date)
+    if bounds is None:
+        st.info("No earlier saved ratings date is available for this selection.")
+        return
+    minimum, maximum, _ = bounds
+    key = f"rankings_compare_date_{season}"
+    saved = st.session_state.get(key)
+    valid = valid_comparison_date(saved, bounds)
+    if key in st.session_state and saved != valid:
+        del st.session_state[key]
+    requested = st.date_input(
+        "Compare ratings with date", value=valid, min_value=minimum, max_value=maximum, key=key,
+        help="Uses the latest saved ratings on or before this date. Both dates use the TeamRankings Blend selected above.",
+    )
+    previous_date = resolve_rating_date(run_dates, requested)
+    try:
+        previous = get_snapshot_power_rankings(season, previous_date)
+        previous = blend_power_with_teamrankings(previous, season, previous_date, weight)
+    except Exception:
+        st.info("The comparison ratings could not be loaded. Current rankings analysis remains available.")
+        return
+    if ranked_teams(previous).empty:
+        st.info("No ratings are available in the comparison snapshot.")
+        return
+    st.caption(f"Current: {format_date(actual_date)} · {format_blend_meta(power_df, weight)}. "
+               f"Comparison: {format_date(previous_date)} · {format_blend_meta(previous, weight)}. "
+               f"Requested comparison: {format_date(requested)}.")
+    st.caption(f"Both snapshots use the selected {weight:.0%} TeamRankings blend with data available on each snapshot date. "
+               "Movers cover all rated FBS teams; rank and rating changes require values in both snapshots.")
+    if weight > 0:
+        for label, frame in [("Current", power_df), ("Comparison", previous)]:
+            coverage = frame.get("teamrankings_scaled_rating", pd.Series(np.nan, index=frame.index)).notna()
+            if not coverage.all():
+                st.caption(f"{label}: {int((~coverage).sum())} teams use BG-only ratings because a usable TeamRankings blend is unavailable.")
+    render_movement_panels(build_rank_movements(power_df, previous), poll=False)
 
 
 def render_poll_list(df: pd.DataFrame, title: str, meta: str) -> None:
@@ -1726,8 +1591,9 @@ if isinstance(power_season, int) and power_season >= 2026:
     power_df = get_snapshot_power_rankings(power_season, selected_rating_date)
 else:
     power_df = get_power_rankings(power_season) if isinstance(power_season, int) else pd.DataFrame()
+actual_rating_date = resolve_rating_date(rating_run_dates, selected_rating_date)
 power_rating_as_of = (
-    selected_rating_date
+    actual_rating_date
     if isinstance(power_season, int) and power_season >= 2026
     else date.today()
 )
@@ -1801,50 +1667,13 @@ with list_a:
 with list_b:
     render_power_list(power_df, power_title, power_meta)
 
-with st.expander("Posting export"):
-    comparison_df = build_poll_comparison_df(poll_df, power_df)
-    if not power_df.empty and not comparison_df.empty:
-        ratings_png = build_power_rankings_png(
-            power_df,
-            "BG Analytics Statistical Ratings",
-            power_meta,
-        )
-        comparison_meta = f"{poll_meta} | {power_meta}"
-        comparison_png = build_poll_comparison_png(
-            comparison_df,
-            poll_label or "Poll",
-            "BG Rating",
-            comparison_meta,
-        )
-        ratings_file = f"bg_statistical_ratings_{power_season}_{selected_rating_date or 'end_of_season'}.png"
-        comparison_file = (
-            f"poll_vs_bg_rating_{slugify(poll_label or 'poll')}_"
-            f"{power_season}_{selected_rating_date or 'end_of_season'}.png"
-        )
+st.subheader("Rankings Analysis")
+st.caption(f"{poll_label}: {poll_meta} · Selected ratings: {power_meta}")
+render_snapshot_analysis(poll_df, power_df, poll_label, poll_season == power_season)
 
-        preview_a, preview_b = st.columns(2)
-        with preview_a:
-            st.image(ratings_png, caption="BG Analytics statistical ratings")
-            st.download_button(
-                "Download statistical ratings PNG",
-                data=ratings_png,
-                file_name=ratings_file,
-                mime="image/png",
-            )
-        with preview_b:
-            st.image(comparison_png, caption="Poll vs BG Analytics comparison")
-            st.download_button(
-                "Download comparison PNG",
-                data=comparison_png,
-                file_name=comparison_file,
-                mime="image/png",
-            )
-
-        st.download_button(
-            "Download both PNGs",
-            data=build_png_zip({ratings_file: ratings_png, comparison_file: comparison_png}),
-            file_name=f"team_rankings_exports_{power_season}_{selected_rating_date or 'end_of_season'}.zip",
-            mime="application/zip",
-        )
-    else:
-        st.info("Select a poll and a BG rating with available teams to generate posting PNGs.")
+st.subheader("Movement")
+poll_movement_tab, ratings_movement_tab = st.tabs(["Poll", "Ratings"])
+with poll_movement_tab:
+    render_poll_movement(poll_df, poll, poll_label, poll_season, poll_week, poll_weeks)
+with ratings_movement_tab:
+    render_ratings_movement(power_df, power_season, actual_rating_date, rating_run_dates, teamrankings_blend_weight)

@@ -1,6 +1,14 @@
 # BG.Analytics.CFB.Dash
 BG.Analytics CFB Dashboard
 
+**Team Rankings → Rankings Analysis** compares the selected poll with the selected
+ratings blend using full rank gaps; unranked poll teams show minimum gaps. It also
+shows Top 25 agreement, bubble teams, and movement. Ratings movement uses a chosen
+comparison date, resolves missing dates to the latest earlier snapshot, and applies
+the same TeamRankings blend to both snapshots using their respective historical
+data. Poll movement uses the previous available week. Posting PNG/ZIP exports have
+been replaced by this analysis.
+
 The **League Wide → Predictions** page reads successful manual/nightly season
 snapshots and provides sortable team projections, conference races, and comparisons
 to a calendar date. If that day has no snapshot, the latest available snapshot on
