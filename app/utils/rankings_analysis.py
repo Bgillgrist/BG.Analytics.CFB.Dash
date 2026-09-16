@@ -52,6 +52,8 @@ def build_bubble_watch(ratings: pd.DataFrame, poll: pd.DataFrame | None = None) 
     bubble["points_to_top25"] = cutoff.iloc[0] - bubble["power_rating"] if not cutoff.empty else np.nan
     official = ranked_teams(pd.DataFrame() if poll is None else poll)
     official = official.loc[official["rank"].le(25), ["team", "rank"]]
+    if official.empty:
+        return bubble.assign(poll_rank=np.nan)
     return bubble.merge(official.rename(columns={"rank": "poll_rank"}), on="team", how="left")
 
 

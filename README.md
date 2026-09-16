@@ -31,3 +31,32 @@ in raw rankings. Conference/team filters do not recalculate weekly ranks.
 Run all data and optional Streamlit interaction tests with `python -m pytest tests -q`.
 Weekly query and scoring tests are in `tests/test_weekly_performances.py`; its page
 interaction tests require Streamlit. No database writes or export controls are added.
+
+**Betting → Best Bets** classifies upcoming FBS-vs-FBS moneylines and spreads
+using four models: spread-aware and TeamRankings without spread input, each with
+and without pregame advanced statistics. Run analysis explicitly retrains/tests
+all four models; Refresh odds reuses their saved artifacts. Filters and page loads
+never train, refresh odds, or write to the database.
+
+Set `CFBD_API_KEY` alongside `NEON_DATABASE_URL` in Streamlit secrets to enable
+these controls. The first explicit run creates additive `public.betting_*` tables.
+Saved results can be viewed without the API key. No Betting jobs are scheduled.
+
+**Betting → Betting History** grades the last successful snapshot completed before
+each game's kickoff, once per game/model/market, at its saved line. Earlier
+classifications remain in the timeline. Spread hit rate excludes pushes and uses
+a 50% comparison baseline; spread ROI is unavailable. Moneyline paper returns
+use the saved offered price. Historical research for 2023–2025 is shown separately
+because old CFBD odds have no verified collection timestamps.
+
+The shared engine is distributed in
+`vendor/bga_cfb_betting-0.1.0-py3-none-any.whl`, built from the `cfb_betting`
+package in the analytics repository. Install requirements from this repository's
+root. Hosting does not require an adjacent analytics checkout.
+Engine documentation and CLI backtest instructions are in that repository's
+`docs/betting_handoff.md`. The existing nightly game refresh records score
+corrections after the betting schema exists.
+
+Betting interaction tests are in `tests/test_betting_pages.py`; engine, cutoff,
+quote, artifact, and settlement tests live with the shared package. On macOS,
+XGBoost requires an available OpenMP runtime (libomp).

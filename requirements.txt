@@ -6,3 +6,4 @@ psycopg[binary]>=3.2
 python-dotenv
 plotly>=5.18.0
 pillow>=10.0.0
+./vendor/bga_cfb_betting-0.1.0-py3-none-any.whl

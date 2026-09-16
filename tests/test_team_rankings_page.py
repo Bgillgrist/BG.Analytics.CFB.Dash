@@ -72,7 +72,7 @@ def page(monkeypatch):
             return pd.DataFrame({"team": [f"Team {i:02}" for i in range(1, 36)], "team_id": [str(i) for i in range(1, 36)], "logo": [None] * 35})
         if "GROUP BY" in query and "FROM public.team_rating_runs" in query:
             return pd.DataFrame({"completed_date": days})
-        if "JOIN public.team_ratings" in query:
+        if "JOIN public.team_ratings" in query or "FROM public.team_ratings" in query:
             day = max(day for day in days if day <= params["completed_date"])
             if state["history_error"] and day < days[-1]:
                 raise ConnectionError("Comparison unavailable")
