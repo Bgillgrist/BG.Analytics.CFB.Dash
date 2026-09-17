@@ -8,7 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from utils.db import read_df
-from utils.conquest_slides import conquest_slide_controls
+from utils.conquest_slides import conquest_slide_controls, embed_conquest_logos
 from utils.schedule_awards import build_award_shortlists, shortlist_table
 
 
@@ -1043,6 +1043,7 @@ def build_county_conquest_map(
                 "lon": float(row.longitude),
                 "color": display_color,
                 "logo": logo,
+                "logoFallback": safe_text(owner.get("team_logo"), "") if map_mode == "Team" else "",
                 "logoName": logo_name,
                 "logoGroupKey": logo_key,
                 "logoRadius": logo_radius,
@@ -1053,7 +1054,8 @@ def build_county_conquest_map(
             }
         )
 
-    seeds_json = json.dumps(seeds)
+    embed_conquest_logos(seeds)
+    seeds_json = json.dumps(seeds).replace("<", "\\u003c")
     source = html.escape(source_label)
     escaped_render_key = html.escape(render_key)
 

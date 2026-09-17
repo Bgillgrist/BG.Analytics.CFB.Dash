@@ -129,15 +129,27 @@
       if (!url || url.startsWith("data:")) return;
       if (!imageData.has(url)) {
         imageData.set(url, (async () => {
-          const response = await fetch(url, { mode: "cors", credentials: "omit", signal: AbortSignal.timeout(20000) });
-          if (!response.ok) throw new Error("Logo request failed");
-          return blobToDataUrl(await response.blob());
+          // Normally logos are already embedded by the server. This is a retry
+          // for a transient server failure, without requiring AbortSignal.timeout.
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 20000);
+          try {
+            const response = await fetch(url, { mode: "cors", credentials: "omit", signal: controller.signal });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await blobToDataUrl(await response.blob());
+            await loadImage(data);
+            return data;
+          } finally {
+            clearTimeout(timeout);
+          }
         })());
       }
       try {
         image.setAttribute("href", await imageData.get(url));
-      } catch (_) {
-        throw new Error("A team logo could not be loaded for the slides. Try again in a moment.");
+      } catch (error) {
+        const name = image.parentElement.querySelector("title")?.textContent.split("\n")[0] || "a team";
+        console.warn("Conquest slide logo failed", { name, url, error });
+        throw new Error(`The logo for ${name} could not be loaded (${error.message}). Refresh the page to retry. Logo URL: ${url}`);
       }
     }));
     map.setAttribute("xmlns", "http://www.w3.org/2000/svg");
