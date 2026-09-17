@@ -288,9 +288,7 @@
     drawHeader(context, 1, "LAND LEADERS");
     context.textAlign = "left";
     context.fillStyle = "#0c2c50";
-    fittedText(context, "WHO OWNS THE MAP?", 80, 394, 2000, 88);
-    context.font = '42px Arial, sans-serif';
-    context.fillText(`Top ${Math.min(10, schools.length)} schools · ${config.scope}`, 80, 510);
+    fittedText(context, "WHO OWNS THE MAP?", 80, 388, 2000, 148);
     const columns = [
       { x: 80, title: "MOST COUNTIES", rows: countyLeaders, metric: "counties" },
       { x: 1112, title: "MOST LAND AREA", rows: areaLeaders, metric: "landAreaM2" },
@@ -329,8 +327,6 @@
     }
     context.fillStyle = "#41546b";
     context.textAlign = "left";
-    context.font = '34px Arial, sans-serif';
-    context.fillText("Current ownership · Land only, including Alaska and Hawaii · Equal totals share a rank", 80, 2570);
     context.font = '30px Arial, sans-serif';
     context.fillText("Area: U.S. Census 2017 county measurements, matched to this map’s boundaries", 80, 2620);
   }
