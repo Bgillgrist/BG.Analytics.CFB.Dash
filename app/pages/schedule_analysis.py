@@ -8,8 +8,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from utils.db import read_df
-from utils.conquest_slides import conquest_slide_controls, embed_conquest_logos
+from utils.conquest_slide_runtime import load_slide_helpers
 from utils.schedule_awards import build_award_shortlists, shortlist_table
+
+
+conquest_slides = load_slide_helpers()
 
 
 ET_TZ = "America/New_York"
@@ -1063,7 +1066,7 @@ def build_county_conquest_map(
             }
         )
 
-    embed_conquest_logos([*seeds, *school_assets.values()])
+    conquest_slides.embed_conquest_logos([*seeds, *school_assets.values()])
     for seed in seeds:
         seed["ownerLogo"] = school_assets[seed["ownerTeamId"]]["logo"]
     seeds_json = json.dumps(seeds).replace("<", "\\u003c")
@@ -1130,7 +1133,7 @@ def build_county_conquest_map(
         <div class="map-chip">{source}</div>
         <div id="county-tooltip" class="county-tooltip"></div>
       </div>
-      {conquest_slide_controls(map_scope, season, checkpoint)}
+      {conquest_slides.conquest_slide_controls(map_scope, season, checkpoint)}
       <script>
         const seeds = {seeds_json};
         const width = 1200;

@@ -12,6 +12,9 @@ from urllib.request import Request, urlopen
 from PIL import Image
 
 
+SLIDE_API_VERSION = 3
+
+
 @lru_cache(maxsize=512)
 def _logo_data_url(url: str) -> str:
     """Cache successful, full-resolution images only; failed requests can retry."""
