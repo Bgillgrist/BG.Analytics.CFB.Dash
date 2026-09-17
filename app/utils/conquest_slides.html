@@ -1,0 +1,293 @@
+<style>
+  .slide-tools { padding: 14px 2px 8px; color: #172b45; }
+  .slide-tools button { border: 1px solid #bdcbd9; border-radius: 7px; background: #fff;
+    color: #172b45; padding: 10px 16px; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  .slide-tools button:hover { border-color: #28669c; background: #edf4fb; }
+  .slide-tools button:disabled { opacity: .55; cursor: default; }
+  .slide-tools button:focus-visible { outline: 3px solid #398ddd; outline-offset: 2px; }
+  .slide-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .slide-status { font: 14px/1.5 system-ui, sans-serif; margin: 10px 0; }
+  .slide-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .slide-grid figure { margin: 0; min-width: 0; }
+  .slide-grid img { width: 100%; height: auto; display: block; background: #e5e7eb; }
+  .slide-grid figcaption { display: flex; gap: 8px; align-items: center; justify-content: space-between;
+    padding: 10px 0; font: 600 14px system-ui, sans-serif; }
+  .slide-tools [hidden] { display: none !important; }
+  @media (max-width: 600px) { .slide-grid { grid-template-columns: 1fr; } }
+</style>
+<section class="slide-tools" aria-label="Conquest map slides">
+  <div class="slide-actions">
+    <button id="make-slides" type="button" disabled aria-controls="slide-results">Show slide images</button>
+    <button id="hide-slides" type="button" hidden aria-controls="slide-results">Hide slide images</button>
+  </div>
+  <p id="slide-status" class="slide-status" role="status" aria-live="polite">Loading map…</p>
+  <div id="slide-results" hidden>
+    <p class="slide-status">Two 2160 × 2160 PNGs with a continuous map. Copy each slide and paste it into your post.
+      You can also right-click an image and choose Copy Image.</p>
+    <div class="slide-grid">
+      <figure>
+        <img id="slide-image-0" alt="Slide 1: conquest map rules and the western half of the map" />
+        <figcaption>Slide 1 <button type="button" class="copy-slide" data-slide="0" disabled>Copy slide 1</button></figcaption>
+      </figure>
+      <figure>
+        <img id="slide-image-1" alt="Slide 2: the matching eastern half of the conquest map" />
+        <figcaption>Slide 2 <button type="button" class="copy-slide" data-slide="1" disabled>Copy slide 2</button></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const config = __CONQUEST_SLIDE_CONFIG__;
+  const makeButton = document.getElementById("make-slides");
+  const hideButton = document.getElementById("hide-slides");
+  const results = document.getElementById("slide-results");
+  const status = document.getElementById("slide-status");
+  const copyButtons = [...document.querySelectorAll(".copy-slide")];
+  const size = 2160;
+  let blobs = [];
+  let previewUrls = [];
+  let revision = 0;
+  let generatedRevision = -1;
+  let generating = false;
+
+  // Resize our own frame and its layout container for older components.html
+  // hosts. Current st.iframe also measures srcdoc content automatically.
+  // Scrolling remains available if same-origin frame access is unavailable.
+  function resizeFrame() {
+    const height = Math.ceil(document.body.getBoundingClientRect().height) + 12;
+    try {
+      const frame = window.frameElement;
+      if (frame) {
+        frame.style.height = `${height}px`;
+        const container = frame.closest('[data-testid="stElementContainer"]');
+        if (container) container.style.height = "auto";
+      }
+    } catch (_) { /* The component's scrollbar remains available. */ }
+  }
+  new ResizeObserver(resizeFrame).observe(document.body);
+
+  window.addEventListener("conquest-map-ready", () => {
+    makeButton.disabled = false;
+    status.textContent = "Position your logos, then show the two slide images to copy and paste.";
+  });
+  window.addEventListener("conquest-map-error", () => {
+    status.textContent = "The map could not load. Reload the page to try again.";
+  });
+  window.addEventListener("conquest-map-changed", () => {
+    revision += 1;
+    if (!blobs.length && !generating) return;
+    copyButtons.forEach(button => { button.disabled = true; });
+    results.hidden = true;
+    hideButton.hidden = true;
+    makeButton.textContent = "Update slide images";
+    status.textContent = "Logo positions changed. Update the slide images before copying.";
+  });
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function loadImage(url) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("An image could not be rendered. Please try again."));
+      image.src = url;
+    });
+  }
+
+  // SVG images do not inherit page CSS or load external nested images. Embed both
+  // so the high-resolution render matches the current map, including dragged logos.
+  function styledClone(original) {
+    const clone = original.cloneNode(true);
+    const originals = [original, ...original.querySelectorAll("*")];
+    const clones = [clone, ...clone.querySelectorAll("*")];
+    const properties = ["fill", "fill-opacity", "stroke", "stroke-width", "stroke-opacity",
+      "stroke-linejoin", "stroke-linecap", "font-family", "font-size", "font-weight",
+      "letter-spacing", "text-anchor", "dominant-baseline", "paint-order", "filter", "opacity"];
+    originals.forEach((element, index) => {
+      const style = getComputedStyle(element);
+      properties.forEach(property => clones[index].style.setProperty(property, style.getPropertyValue(property)));
+      clones[index].style.setProperty("vector-effect", "none");
+    });
+    return clone;
+  }
+
+  async function renderMap() {
+    const map = styledClone(document.getElementById("county-map"));
+    const logos = styledClone(document.getElementById("logo-layer"));
+    map.append(...logos.childNodes);
+    const imageData = new Map();
+    await Promise.all([...map.querySelectorAll("image")].map(async image => {
+      const url = image.getAttribute("href");
+      if (!url || url.startsWith("data:")) return;
+      if (!imageData.has(url)) {
+        imageData.set(url, (async () => {
+          const response = await fetch(url, { mode: "cors", credentials: "omit", signal: AbortSignal.timeout(20000) });
+          if (!response.ok) throw new Error("Logo request failed");
+          return blobToDataUrl(await response.blob());
+        })());
+      }
+      try {
+        image.setAttribute("href", await imageData.get(url));
+      } catch (_) {
+        throw new Error("A team logo could not be loaded for the slides. Try again in a moment.");
+      }
+    }));
+    map.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    map.setAttribute("width", "1200");
+    map.setAttribute("height", "760");
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(map)], { type: "image/svg+xml" }));
+    try { return await loadImage(url); }
+    finally { URL.revokeObjectURL(url); }
+  }
+
+  function wrappedLines(context, text, maxWidth) {
+    const lines = [];
+    let line = "";
+    for (const word of text.split(/\s+/)) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && context.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else line = next;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function drawRules(context, panelWidth) {
+    context.fillStyle = "#0c2c50";
+    context.fillRect(0, 0, panelWidth, size);
+    context.fillStyle = "#ffffff";
+    context.textBaseline = "top";
+    const font = 'Impact, "Arial Narrow", "Helvetica Neue", sans-serif';
+    const left = 42;
+    const available = panelWidth - left * 2;
+    context.font = `900 76px ${font}`;
+    context.textAlign = "center";
+    context.fillText("BG.ANALYTICS CFB", panelWidth / 2, 42, available);
+    context.fillText("CONQUEST MAP", panelWidth / 2, 130, available);
+    context.textAlign = "left";
+    context.font = `900 64px ${font}`;
+    context.fillText("MAP RULES:", left, 280);
+
+    let fontSize = 59;
+    let ruleLines;
+    // Fit all rules as one block without squeezing or clipping individual lines.
+    do {
+      context.font = `900 ${fontSize}px ${font}`;
+      ruleLines = config.rules.map((rule, i) => wrappedLines(context, `${i + 1}. ${rule.toUpperCase()}`, available));
+      if (ruleLines.reduce((sum, lines) => sum + lines.length * fontSize * 1.16 + 64, 0) <= 1450) break;
+      fontSize -= 1;
+    } while (fontSize > 32);
+    let y = 415;
+    for (const lines of ruleLines) {
+      for (const line of lines) {
+        context.fillText(line, left, y);
+        y += fontSize * 1.16;
+      }
+      y += 64;
+    }
+    context.font = '500 26px system-ui, sans-serif';
+    let sourceY = 1900;
+    for (const line of wrappedLines(context, config.source, available)) {
+      context.fillText(line, left, sourceY);
+      sourceY += 34;
+    }
+    context.textAlign = "center";
+    context.font = `900 34px ${font}`;
+    ["FOLLOW @REDDITCFB FOR THE", "ORIGINAL VERSION WITH ALL FBS SCHOOLS!"].forEach((line, i) => {
+      context.fillText(line, panelWidth / 2, 2042 + i * 43, available);
+    });
+  }
+
+  function pngBlob(canvas) {
+    return new Promise((resolve, reject) => canvas.toBlob(blob => {
+      if (blob) resolve(blob);
+      else reject(new Error("Could not create the PNG. Please try again."));
+    }, "image/png"));
+  }
+
+  makeButton.addEventListener("click", async () => {
+    if (blobs.length && generatedRevision === revision) {
+      results.hidden = false;
+      hideButton.hidden = false;
+      return;
+    }
+    makeButton.disabled = true;
+    generating = true;
+    status.textContent = "Preparing full-resolution slide images…";
+    const snapshotRevision = revision;
+    try {
+      const map = await renderMap();
+      const panorama = document.createElement("canvas");
+      panorama.width = size * 2;
+      panorama.height = size;
+      const context = panorama.getContext("2d");
+      context.fillStyle = "#e5e7eb";
+      context.fillRect(0, 0, panorama.width, panorama.height);
+      const panelWidth = 780;
+      const scale = Math.min((panorama.width - panelWidth) / 1200, size / 760);
+      const mapWidth = 1200 * scale;
+      const mapHeight = 760 * scale;
+      context.drawImage(map, panelWidth + (panorama.width - panelWidth - mapWidth) / 2,
+        (size - mapHeight) / 2, mapWidth, mapHeight);
+      drawRules(context, panelWidth);
+      // Crop the same panorama at an integer pixel boundary for a seamless pair.
+      const nextBlobs = await Promise.all([0, 1].map(index => {
+        const slide = document.createElement("canvas");
+        slide.width = size;
+        slide.height = size;
+        slide.getContext("2d").drawImage(panorama, index * size, 0, size, size, 0, 0, size, size);
+        return pngBlob(slide);
+      }));
+      if (snapshotRevision !== revision) {
+        status.textContent = "Logo positions changed while preparing slides. Click Update slide images to try again.";
+        return;
+      }
+      const nextUrls = nextBlobs.map(blob => URL.createObjectURL(blob));
+      await Promise.all(nextUrls.map(loadImage));
+      nextUrls.forEach((url, index) => { document.getElementById(`slide-image-${index}`).src = url; });
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
+      previewUrls = nextUrls;
+      blobs = nextBlobs;
+      generatedRevision = snapshotRevision;
+      results.hidden = false;
+      hideButton.hidden = false;
+      makeButton.textContent = "Show slide images";
+      copyButtons.forEach(button => { button.disabled = false; });
+      status.textContent = "Ready. Copy slide 1, paste it, then copy and paste slide 2.";
+    } catch (error) {
+      status.textContent = error.message || "Could not prepare the slides. Please try again.";
+    } finally {
+      generating = false;
+      makeButton.disabled = false;
+    }
+  });
+
+  hideButton.addEventListener("click", () => {
+    results.hidden = true;
+    hideButton.hidden = true;
+  });
+  copyButtons.forEach(button => button.addEventListener("click", async () => {
+    const index = Number(button.dataset.slide);
+    if (generatedRevision !== revision || !blobs[index]) return;
+    try {
+      if (!navigator.clipboard?.write || !window.ClipboardItem) throw new Error("Clipboard unavailable");
+      // Blobs are already ready: the clipboard write stays inside the user gesture,
+      // which is required by Safari and by browsers with strict clipboard policies.
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blobs[index] })]);
+      status.textContent = `Slide ${index + 1} copied at full resolution. Paste it into your slide or post.`;
+    } catch (_) {
+      status.textContent = `Your browser blocked the copy button. Right-click slide ${index + 1} and choose Copy Image (on a phone, touch and hold the image).`;
+    }
+  }));
+})();
+</script>

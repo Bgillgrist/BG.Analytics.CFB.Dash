@@ -8,6 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from utils.db import read_df
+from utils.conquest_slides import conquest_slide_controls
 from utils.schedule_awards import build_award_shortlists, shortlist_table
 
 
@@ -990,6 +991,7 @@ def build_county_conquest_map(
     map_mode: str,
     render_key: str,
     owner_teams: pd.DataFrame | None = None,
+    map_scope: str = "Power 4 + Notre Dame",
 ) -> str:
     if teams.empty:
         return ""
@@ -1115,6 +1117,7 @@ def build_county_conquest_map(
         <div class="map-chip">{source}</div>
         <div id="county-tooltip" class="county-tooltip"></div>
       </div>
+      {conquest_slide_controls(map_scope, source_label)}
       <script>
         const seeds = {seeds_json};
         const width = 1200;
@@ -1172,6 +1175,7 @@ def build_county_conquest_map(
               Math.max(d.radius, Math.min(height - d.radius, d.y + d.radius * 1.2)),
               d.count
             );
+            window.dispatchEvent(new Event("conquest-map-changed"));
           }});
           group.call(
             d3.drag()
@@ -1186,6 +1190,7 @@ def build_county_conquest_map(
               }})
               .on("end", function () {{
                 d3.select(this).classed("dragging", false);
+                window.dispatchEvent(new Event("conquest-map-changed"));
               }})
           );
         }}
@@ -1394,7 +1399,9 @@ def build_county_conquest_map(
             const center = centerForCounties(largestMass);
             if (center) drawLogo(logoInfo, center.x, center.y, counties.length);
           }}
+          window.dispatchEvent(new Event("conquest-map-ready"));
         }}).catch(() => {{
+          window.dispatchEvent(new Event("conquest-map-error"));
           svg.append("rect").attr("width", width).attr("height", height).attr("fill", "#e5e7eb");
           svg.append("text")
             .attr("x", 28)
@@ -1681,8 +1688,12 @@ else:
         map_mode,
         map_render_key,
         map_owner_teams,
+        map_scope=map_scope,
     )
     if map_html:
-        components.html(map_html, height=790, scrolling=False)
+        if hasattr(st, "iframe"):
+            st.iframe(map_html, height="content")
+        else:
+            components.html(map_html, height=890, scrolling=True)
     else:
         st.info("No conquest territories can be drawn with the current team locations.")

@@ -1,6 +1,14 @@
 # BG.Analytics.CFB.Dash
 BG.Analytics CFB Dashboard
 
+The **Conquest Map** has a **Show slide images** button below the map. After
+positioning the logos, use it to display two matching 2160 × 2160 PNG slides with
+a rules panel on the first slide. Use **Copy slide 1** and **Copy slide 2**, or
+right-click each image and choose **Copy Image**, then paste into your post.
+Both slides are cut from one continuous map; rules follow the selected map scope.
+Moving or duplicating a logo prompts you to update the slides before copying.
+No download or export is needed.
+
 **Team Rankings → Rankings Analysis** compares the selected poll with the selected
 ratings blend using full rank gaps; unranked poll teams show minimum gaps. It also
 shows Top 25 agreement, bubble teams, and movement. Ratings movement uses a chosen
