@@ -15,8 +15,8 @@ from utils.conquest_slides import conquest_slide_controls
 from utils import conquest_slides
 
 
-def slide_config(scope, label="2026 | Week 3"):
-    markup = conquest_slide_controls(scope, label)
+def slide_config(scope, season=2026, checkpoint="Week 3"):
+    markup = conquest_slide_controls(scope, season, checkpoint)
     return json.loads(re.search(r"const config = (.*);", markup).group(1))
 
 
@@ -38,16 +38,23 @@ def test_rules_match_ownership_scope(scope, initial_teams, promotions):
         assert "Only games between schools in the selected map scope" in config["rules"][2]
 
 
-def test_checkpoint_and_mode_are_preserved_in_slide_caption():
-    label = "2026 | P4 + Promotions | Week 4 | Conference territory map"
-    assert slide_config("P4 + Promotions", label)["source"] == label
+@pytest.mark.parametrize(
+    "checkpoint,heading",
+    [("Week 4", "Week 4"), ("Postseason Week 1", "Postseason Week 1"),
+     ("Before Season", "Preseason"), ("After Season", "Final Map")],
+)
+def test_selected_season_and_checkpoint_drive_header(checkpoint, heading):
+    config = slide_config("P4 + Promotions", 2027, checkpoint)
+    assert config["season"] == "2027"
+    assert config["week"] == heading
+    assert "source" not in config
 
 
-def test_caption_cannot_insert_html_or_terminate_script():
+def test_heading_cannot_insert_html_or_terminate_script():
     label = '</script><img src=x onerror="alert(1)"> & __CONQUEST_SLIDE_CONFIG__'
-    markup = conquest_slide_controls("P4 + Promotions", label)
+    markup = conquest_slide_controls("P4 + Promotions", 2026, label)
     assert label not in markup
-    assert slide_config("P4 + Promotions", label)["source"] == label
+    assert slide_config("P4 + Promotions", checkpoint=label)["week"] == label
 
 
 @pytest.fixture

@@ -62,7 +62,13 @@ def embed_conquest_logos(seeds: list[dict]) -> None:
             seed["logo"] = embedded[choice]
 
 
-def conquest_slide_controls(map_scope: str, source_label: str) -> str:
+@lru_cache(maxsize=1)
+def county_land_areas() -> dict[str, int]:
+    path = Path(__file__).resolve().parents[1] / "assets" / "conquest_county_land_2017.json"
+    return json.loads(path.read_text(encoding="utf-8"))["land_area_m2"]
+
+
+def conquest_slide_controls(map_scope: str, season: int | str, checkpoint: str) -> str:
     if map_scope in {"Power 4 + Notre Dame", "P4 + Promotions"}:
         starting_rule = "Power 4 schools and Notre Dame start the season with the land around their school."
     elif map_scope == "G6 + UConn":
@@ -76,7 +82,10 @@ def conquest_slide_controls(map_scope: str, source_label: str) -> str:
         else "Only games between schools in the selected map scope transfer land."
     )
     config = {
-        "source": source_label,
+        "season": str(season),
+        "week": {"Before Season": "Preseason", "After Season": "Final Map"}.get(checkpoint, checkpoint),
+        "scope": map_scope,
+        "countyLandAreaM2": county_land_areas(),
         "rules": [
             starting_rule,
             "When a team loses a game, the team that beat them takes all the land they currently own.",
@@ -87,4 +96,5 @@ def conquest_slide_controls(map_scope: str, source_label: str) -> str:
     # Prevent labels from terminating the inline script in the component document.
     config_json = json.dumps(config).replace("<", "\\u003c")
     template = Path(__file__).with_name("conquest_slides.html").read_text(encoding="utf-8")
-    return template.replace("__CONQUEST_SLIDE_CONFIG__", config_json)
+    helpers = Path(__file__).with_name("conquest_rankings.js").read_text(encoding="utf-8")
+    return template.replace("__CONQUEST_RANKING_HELPERS__", helpers).replace("__CONQUEST_SLIDE_CONFIG__", config_json)

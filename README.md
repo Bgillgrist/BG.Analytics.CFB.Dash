@@ -2,10 +2,16 @@
 BG.Analytics CFB Dashboard
 
 The **Conquest Map** has a **Show slide images** button below the map. After
-positioning the logos, use it to display two matching 2160 × 2160 PNG slides with
-a rules panel on the first slide. Use **Copy slide 1** and **Copy slide 2**, or
+positioning the logos, use it to display three matching 2160 × 2700 portrait PNG
+slides (4:5) for Instagram, with the season and week in a large header on every
+slide and a rules panel on the first. Use each slide's **Copy** button, or
 right-click each image and choose **Copy Image**, then paste into your post.
-Both slides are cut from one continuous map; rules follow the selected map scope.
+The first two slides are cut from one continuous map; rules follow the selected map scope.
+**Slide 3** summarizes the top ten schools by counties owned and land area owned,
+side by side with school logos and totals. It follows the current map week and
+scope, even in Conference mode. Area uses Census land-only square miles (including
+Alaska and Hawaii), matched to the map's county boundaries. Use **Copy slide 3**
+to finish the carousel. Rankings tests: `node --test tests/test_conquest_rankings.cjs`.
 Moving or duplicating a logo prompts you to update the slides before copying.
 No download or export is needed.
 

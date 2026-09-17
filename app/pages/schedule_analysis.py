@@ -992,6 +992,9 @@ def build_county_conquest_map(
     render_key: str,
     owner_teams: pd.DataFrame | None = None,
     map_scope: str = "Power 4 + Notre Dame",
+    *,
+    season: int,
+    checkpoint: str,
 ) -> str:
     if teams.empty:
         return ""
@@ -1008,12 +1011,17 @@ def build_county_conquest_map(
         .to_dict("index")
     )
     seeds = []
+    school_assets = {}
     for row in teams.itertuples(index=False):
         seed_key = str(row.team_key)
         owner_key = owners.get(seed_key, seed_key)
         owner = team_lookup.get(owner_key, team_lookup.get(seed_key, {}))
         owner_team = safe_text(owner.get("team"), owner_key)
         owner_conference = safe_text(owner.get("conference"), "Unknown")
+        school_assets[owner_key] = {
+            "logo": safe_text(owner.get("team_logo"), "") or safe_text(owner.get("team_logo_dark"), ""),
+            "logoFallback": safe_text(owner.get("team_logo_dark"), ""),
+        }
         if map_mode == "Team":
             display_color = safe_text(owner.get("team_color"), "#64748b") or "#64748b"
             logo = safe_text(owner.get("team_logo_dark"), "") or safe_text(owner.get("team_logo"), "")
@@ -1038,6 +1046,7 @@ def build_county_conquest_map(
                 "seedTeamId": seed_key,
                 "ownerTeam": owner_team,
                 "ownerTeamId": owner_key,
+                "ownerColor": safe_text(owner.get("team_color"), "#0c2c50") or "#0c2c50",
                 "conference": owner_conference,
                 "lat": float(row.latitude),
                 "lon": float(row.longitude),
@@ -1054,7 +1063,9 @@ def build_county_conquest_map(
             }
         )
 
-    embed_conquest_logos(seeds)
+    embed_conquest_logos([*seeds, *school_assets.values()])
+    for seed in seeds:
+        seed["ownerLogo"] = school_assets[seed["ownerTeamId"]]["logo"]
     seeds_json = json.dumps(seeds).replace("<", "\\u003c")
     source = html.escape(source_label)
     escaped_render_key = html.escape(render_key)
@@ -1119,7 +1130,7 @@ def build_county_conquest_map(
         <div class="map-chip">{source}</div>
         <div id="county-tooltip" class="county-tooltip"></div>
       </div>
-      {conquest_slide_controls(map_scope, source_label)}
+      {conquest_slide_controls(map_scope, season, checkpoint)}
       <script>
         const seeds = {seeds_json};
         const width = 1200;
@@ -1401,7 +1412,7 @@ def build_county_conquest_map(
             const center = centerForCounties(largestMass);
             if (center) drawLogo(logoInfo, center.x, center.y, counties.length);
           }}
-          window.dispatchEvent(new Event("conquest-map-ready"));
+          window.dispatchEvent(new CustomEvent("conquest-map-ready", {{ detail: {{ counties }} }}));
         }}).catch(() => {{
           window.dispatchEvent(new Event("conquest-map-error"));
           svg.append("rect").attr("width", width).attr("height", height).attr("fill", "#e5e7eb");
@@ -1691,6 +1702,8 @@ else:
         map_render_key,
         map_owner_teams,
         map_scope=map_scope,
+        season=selected_season,
+        checkpoint=map_checkpoint,
     )
     if map_html:
         if hasattr(st, "iframe"):

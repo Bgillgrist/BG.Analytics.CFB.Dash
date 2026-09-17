@@ -22,7 +22,8 @@
   </div>
   <p id="slide-status" class="slide-status" role="status" aria-live="polite">Loading map…</p>
   <div id="slide-results" hidden>
-    <p class="slide-status">Two 2160 × 2160 PNGs with a continuous map. Copy each slide and paste it into your post.
+    <p class="slide-status">Three 2160 × 2700 portrait PNGs (4:5): a continuous two-slide map and school rankings.
+      Copy each slide and paste it into your Instagram carousel.
       You can also right-click an image and choose Copy Image.</p>
     <div class="slide-grid">
       <figure>
@@ -33,23 +34,35 @@
         <img id="slide-image-1" alt="Slide 2: the matching eastern half of the conquest map" />
         <figcaption>Slide 2 <button type="button" class="copy-slide" data-slide="1" disabled>Copy slide 2</button></figcaption>
       </figure>
+      <figure>
+        <img id="slide-image-2" alt="Slide 3: top schools by counties owned and land area owned, with team logos" />
+        <p id="ranking-error" class="slide-status" role="status" hidden></p>
+        <figcaption>Slide 3 <button type="button" class="copy-slide" data-slide="2" disabled>Copy slide 3</button></figcaption>
+      </figure>
     </div>
   </div>
 </section>
 <script>
 (() => {
   const config = __CONQUEST_SLIDE_CONFIG__;
+  __CONQUEST_RANKING_HELPERS__
   const makeButton = document.getElementById("make-slides");
   const hideButton = document.getElementById("hide-slides");
   const results = document.getElementById("slide-results");
   const status = document.getElementById("slide-status");
   const copyButtons = [...document.querySelectorAll(".copy-slide")];
-  const size = 2160;
+  const slideWidth = 2160;
+  const slideHeight = 2700;
+  const headerHeight = 308;
+  const headingFont = 'Impact, "Arial Narrow", "Helvetica Neue", sans-serif';
   let blobs = [];
   let previewUrls = [];
   let revision = 0;
   let generatedRevision = -1;
   let generating = false;
+  let schools = [];
+  let rankingError = "";
+  const inlineLogoCache = new Map();
 
   // Resize our own frame and its layout container for older components.html
   // hosts. Current st.iframe also measures srcdoc content automatically.
@@ -67,9 +80,16 @@
   }
   new ResizeObserver(resizeFrame).observe(document.body);
 
-  window.addEventListener("conquest-map-ready", () => {
+  window.addEventListener("conquest-map-ready", event => {
+    try {
+      schools = summarizeCountyOwnership(event.detail.counties, config.countyLandAreaM2);
+      if (!schools.length) throw new Error("No school ownership is available for this map.");
+      rankingError = "";
+    } catch (error) {
+      rankingError = error.message;
+    }
     makeButton.disabled = false;
-    status.textContent = "Position your logos, then show the two slide images to copy and paste.";
+    status.textContent = "Position your logos, then show the three slide images to copy and paste.";
   });
   window.addEventListener("conquest-map-error", () => {
     status.textContent = "The map could not load. Reload the page to try again.";
@@ -102,6 +122,27 @@
     });
   }
 
+  async function inlineLogo(url) {
+    if (url.startsWith("data:")) return url;
+    if (!inlineLogoCache.has(url)) {
+      inlineLogoCache.set(url, (async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        try {
+          const response = await fetch(url, { mode: "cors", credentials: "omit", signal: controller.signal });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await blobToDataUrl(await response.blob());
+          await loadImage(data);
+          return data;
+        } finally {
+          clearTimeout(timeout);
+        }
+      })());
+    }
+    try { return await inlineLogoCache.get(url); }
+    catch (error) { inlineLogoCache.delete(url); throw error; }
+  }
+
   // SVG images do not inherit page CSS or load external nested images. Embed both
   // so the high-resolution render matches the current map, including dragged logos.
   function styledClone(original) {
@@ -123,29 +164,11 @@
     const map = styledClone(document.getElementById("county-map"));
     const logos = styledClone(document.getElementById("logo-layer"));
     map.append(...logos.childNodes);
-    const imageData = new Map();
     await Promise.all([...map.querySelectorAll("image")].map(async image => {
       const url = image.getAttribute("href");
       if (!url || url.startsWith("data:")) return;
-      if (!imageData.has(url)) {
-        imageData.set(url, (async () => {
-          // Normally logos are already embedded by the server. This is a retry
-          // for a transient server failure, without requiring AbortSignal.timeout.
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 20000);
-          try {
-            const response = await fetch(url, { mode: "cors", credentials: "omit", signal: controller.signal });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await blobToDataUrl(await response.blob());
-            await loadImage(data);
-            return data;
-          } finally {
-            clearTimeout(timeout);
-          }
-        })());
-      }
       try {
-        image.setAttribute("href", await imageData.get(url));
+        image.setAttribute("href", await inlineLogo(url));
       } catch (error) {
         const name = image.parentElement.querySelector("title")?.textContent.split("\n")[0] || "a team";
         console.warn("Conquest slide logo failed", { name, url, error });
@@ -171,53 +194,85 @@
       } else line = next;
     }
     if (line) lines.push(line);
+    // Avoid a lone final word or number (for example the "4" in "Power 4").
+    if (lines.length > 1 && !lines.at(-1).includes(" ")) {
+      const previous = lines.at(-2).split(" ");
+      const last = `${previous.at(-1)} ${lines.at(-1)}`;
+      if (previous.length > 1 && context.measureText(last).width <= maxWidth) {
+        previous.pop();
+        lines[lines.length - 2] = previous.join(" ");
+        lines[lines.length - 1] = last;
+      }
+    }
     return lines;
+  }
+
+  function fittedText(context, text, x, y, maxWidth, initialSize) {
+    let fontSize = initialSize;
+    do {
+      context.font = `400 ${fontSize}px ${headingFont}`;
+      if (context.measureText(text).width <= maxWidth) break;
+      fontSize -= 1;
+    } while (fontSize > 24);
+    context.fillText(text, x, y);
+  }
+
+  function drawHeader(context, count = 2, title = "CONQUEST MAP") {
+    context.fillStyle = "#0c2c50";
+    context.fillRect(0, 0, slideWidth * count, headerHeight);
+    context.fillStyle = "#e4bd72";
+    context.fillRect(0, headerHeight - 8, slideWidth * count, 8);
+    context.textBaseline = "top";
+    // Repeat the heading so either slide makes sense when viewed on its own.
+    for (let index = 0; index < count; index += 1) {
+      const left = index * slideWidth + 80;
+      const right = (index + 1) * slideWidth - 80;
+      context.textAlign = "left";
+      context.fillStyle = "#e4bd72";
+      fittedText(context, "BG.ANALYTICS CFB", left, 62, 1110, 48);
+      context.fillStyle = "#ffffff";
+      fittedText(context, title, left, 132, 1110, 112);
+      context.textAlign = "right";
+      context.fillStyle = "#e4bd72";
+      fittedText(context, `${config.season} SEASON`, right, 42, 810, 86);
+      context.fillStyle = "#ffffff";
+      fittedText(context, config.week.toUpperCase(), right, 168, 810, 96);
+    }
   }
 
   function drawRules(context, panelWidth) {
     context.fillStyle = "#0c2c50";
-    context.fillRect(0, 0, panelWidth, size);
-    context.fillStyle = "#ffffff";
+    context.fillRect(0, headerHeight, panelWidth, slideHeight - headerHeight);
     context.textBaseline = "top";
-    const font = 'Impact, "Arial Narrow", "Helvetica Neue", sans-serif';
-    const left = 42;
+    const left = 56;
     const available = panelWidth - left * 2;
-    context.font = `900 76px ${font}`;
-    context.textAlign = "center";
-    context.fillText("BG.ANALYTICS CFB", panelWidth / 2, 42, available);
-    context.fillText("CONQUEST MAP", panelWidth / 2, 130, available);
     context.textAlign = "left";
-    context.font = `900 64px ${font}`;
-    context.fillText("MAP RULES:", left, 280);
+    context.fillStyle = "#e4bd72";
+    fittedText(context, "MAP RULES", left, 432, available, 80);
+    context.fillRect(left, 542, 112, 6);
 
-    let fontSize = 59;
+    const rulesTop = 628;
+    const rulesBottom = 2540;
+    const ruleGap = 100;
+    let fontSize = 66;
     let ruleLines;
     // Fit all rules as one block without squeezing or clipping individual lines.
     do {
-      context.font = `900 ${fontSize}px ${font}`;
+      context.font = `400 ${fontSize}px ${headingFont}`;
       ruleLines = config.rules.map((rule, i) => wrappedLines(context, `${i + 1}. ${rule.toUpperCase()}`, available));
-      if (ruleLines.reduce((sum, lines) => sum + lines.length * fontSize * 1.16 + 64, 0) <= 1450) break;
+      const textHeight = ruleLines.reduce((sum, lines) => sum + lines.length * fontSize * 1.2, 0);
+      if (textHeight + ruleGap * (ruleLines.length - 1) <= rulesBottom - rulesTop) break;
       fontSize -= 1;
     } while (fontSize > 32);
-    let y = 415;
+    context.fillStyle = "#ffffff";
+    let y = rulesTop;
     for (const lines of ruleLines) {
       for (const line of lines) {
         context.fillText(line, left, y);
-        y += fontSize * 1.16;
+        y += fontSize * 1.2;
       }
-      y += 64;
+      y += ruleGap;
     }
-    context.font = '500 26px system-ui, sans-serif';
-    let sourceY = 1900;
-    for (const line of wrappedLines(context, config.source, available)) {
-      context.fillText(line, left, sourceY);
-      sourceY += 34;
-    }
-    context.textAlign = "center";
-    context.font = `900 34px ${font}`;
-    ["FOLLOW @REDDITCFB FOR THE", "ORIGINAL VERSION WITH ALL FBS SCHOOLS!"].forEach((line, i) => {
-      context.fillText(line, panelWidth / 2, 2042 + i * 43, available);
-    });
   }
 
   function pngBlob(canvas) {
@@ -225,6 +280,79 @@
       if (blob) resolve(blob);
       else reject(new Error("Could not create the PNG. Please try again."));
     }, "image/png"));
+  }
+
+  function drawRankingSlide(context, countyLeaders, areaLeaders, logos) {
+    context.fillStyle = "#edf0f3";
+    context.fillRect(0, 0, slideWidth, slideHeight);
+    drawHeader(context, 1, "LAND LEADERS");
+    context.textAlign = "left";
+    context.fillStyle = "#0c2c50";
+    fittedText(context, "WHO OWNS THE MAP?", 80, 394, 2000, 88);
+    context.font = '42px Arial, sans-serif';
+    context.fillText(`Top ${Math.min(10, schools.length)} schools · ${config.scope}`, 80, 510);
+    const columns = [
+      { x: 80, title: "MOST COUNTIES", rows: countyLeaders, metric: "counties" },
+      { x: 1112, title: "MOST LAND AREA", rows: areaLeaders, metric: "landAreaM2" },
+    ];
+    for (const column of columns) {
+      context.textAlign = "left";
+      context.fillStyle = "#0c2c50";
+      fittedText(context, column.title, column.x, 602, 968, 68);
+      context.fillStyle = "#e4bd72";
+      context.fillRect(column.x, 690, 968, 6);
+      column.rows.forEach((school, index) => {
+        const y = 732 + index * 178;
+        context.fillStyle = school.rank === 1 ? "#fbf1dc" : "#ffffff";
+        context.fillRect(column.x, y, 968, 162);
+        context.fillStyle = school.color;
+        context.fillRect(column.x, y, 7, 162);
+        context.fillStyle = "#0c2c50";
+        context.textAlign = "center";
+        fittedText(context, String(school.rank), column.x + 53, y + 53, 76, 58);
+        context.fillStyle = "#ffffff";
+        context.fillRect(column.x + 105, y + 23, 116, 116);
+        const logo = logos.get(school.teamId);
+        const scale = Math.min(100 / logo.width, 100 / logo.height);
+        context.drawImage(logo, column.x + 163 - logo.width * scale / 2,
+          y + 81 - logo.height * scale / 2, logo.width * scale, logo.height * scale);
+        context.textAlign = "left";
+        context.fillStyle = "#0c2c50";
+        fittedText(context, school.name.toUpperCase(), column.x + 246, y + 24, 698, 58);
+        const value = column.metric === "counties"
+          ? `${school.counties.toLocaleString("en-US")} ${school.counties === 1 ? "county" : "counties"}`
+          : `${Math.round(school.landAreaM2 / 2589988.110336).toLocaleString("en-US")} sq mi`;
+        context.fillStyle = "#41546b";
+        context.font = '46px Arial, sans-serif';
+        context.fillText(value, column.x + 246, y + 97);
+      });
+    }
+    context.fillStyle = "#41546b";
+    context.textAlign = "left";
+    context.font = '34px Arial, sans-serif';
+    context.fillText("Current ownership · Land only, including Alaska and Hawaii · Equal totals share a rank", 80, 2570);
+    context.font = '30px Arial, sans-serif';
+    context.fillText("Area: U.S. Census 2017 county measurements, matched to this map’s boundaries", 80, 2620);
+  }
+
+  async function renderRankingSlide() {
+    if (rankingError) throw new Error(rankingError);
+    const countyLeaders = rankSchools(schools, "counties");
+    const areaLeaders = rankSchools(schools, "landAreaM2");
+    const leaders = new Map([...countyLeaders, ...areaLeaders].map(school => [school.teamId, school]));
+    const logos = new Map(await Promise.all([...leaders.values()].map(async school => {
+      try {
+        if (!school.logo) throw new Error("No team logo is available");
+        return [school.teamId, await loadImage(await inlineLogo(school.logo))];
+      } catch (error) {
+        throw new Error(`Cannot load ${school.name}’s logo for slide 3: ${error.message}. Refresh the page to retry.`);
+      }
+    })));
+    const slide = document.createElement("canvas");
+    slide.width = slideWidth;
+    slide.height = slideHeight;
+    drawRankingSlide(slide.getContext("2d"), countyLeaders, areaLeaders, logos);
+    return pngBlob(slide);
   }
 
   makeButton.addEventListener("click", async () => {
@@ -240,42 +368,60 @@
     try {
       const map = await renderMap();
       const panorama = document.createElement("canvas");
-      panorama.width = size * 2;
-      panorama.height = size;
+      panorama.width = slideWidth * 2;
+      panorama.height = slideHeight;
       const context = panorama.getContext("2d");
       context.fillStyle = "#e5e7eb";
       context.fillRect(0, 0, panorama.width, panorama.height);
-      const panelWidth = 780;
-      const scale = Math.min((panorama.width - panelWidth) / 1200, size / 760);
+      const panelWidth = 820;
+      const mapAreaHeight = slideHeight - headerHeight;
+      const scale = Math.min((panorama.width - panelWidth) / 1200, mapAreaHeight / 760);
       const mapWidth = 1200 * scale;
       const mapHeight = 760 * scale;
       context.drawImage(map, panelWidth + (panorama.width - panelWidth - mapWidth) / 2,
-        (size - mapHeight) / 2, mapWidth, mapHeight);
+        headerHeight + (mapAreaHeight - mapHeight) / 2, mapWidth, mapHeight);
+      drawHeader(context);
       drawRules(context, panelWidth);
       // Crop the same panorama at an integer pixel boundary for a seamless pair.
       const nextBlobs = await Promise.all([0, 1].map(index => {
         const slide = document.createElement("canvas");
-        slide.width = size;
-        slide.height = size;
-        slide.getContext("2d").drawImage(panorama, index * size, 0, size, size, 0, 0, size, size);
+        slide.width = slideWidth;
+        slide.height = slideHeight;
+        slide.getContext("2d").drawImage(panorama, index * slideWidth, 0, slideWidth, slideHeight,
+          0, 0, slideWidth, slideHeight);
         return pngBlob(slide);
       }));
+      let summaryError = "";
+      try { nextBlobs.push(await renderRankingSlide()); }
+      catch (error) {
+        nextBlobs.push(null);
+        summaryError = error.message;
+      }
       if (snapshotRevision !== revision) {
         status.textContent = "Logo positions changed while preparing slides. Click Update slide images to try again.";
         return;
       }
-      const nextUrls = nextBlobs.map(blob => URL.createObjectURL(blob));
-      await Promise.all(nextUrls.map(loadImage));
-      nextUrls.forEach((url, index) => { document.getElementById(`slide-image-${index}`).src = url; });
-      previewUrls.forEach(url => URL.revokeObjectURL(url));
+      const nextUrls = nextBlobs.map(blob => blob ? URL.createObjectURL(blob) : null);
+      await Promise.all(nextUrls.filter(Boolean).map(loadImage));
+      nextUrls.forEach((url, index) => {
+        const image = document.getElementById(`slide-image-${index}`);
+        image.hidden = !url;
+        if (url) image.src = url;
+        else image.removeAttribute("src");
+      });
+      const errorMessage = document.getElementById("ranking-error");
+      errorMessage.textContent = summaryError;
+      errorMessage.hidden = !summaryError;
+      previewUrls.filter(Boolean).forEach(url => URL.revokeObjectURL(url));
       previewUrls = nextUrls;
       blobs = nextBlobs;
-      generatedRevision = snapshotRevision;
+      generatedRevision = summaryError ? -1 : snapshotRevision;
       results.hidden = false;
       hideButton.hidden = false;
-      makeButton.textContent = "Show slide images";
-      copyButtons.forEach(button => { button.disabled = false; });
-      status.textContent = "Ready. Copy slide 1, paste it, then copy and paste slide 2.";
+      makeButton.textContent = summaryError ? "Retry slide images" : "Show slide images";
+      copyButtons.forEach(button => { button.disabled = !blobs[Number(button.dataset.slide)]; });
+      status.textContent = summaryError ? "Map slides are ready. Slide 3 needs attention below."
+        : "Ready. Copy and paste slides 1, 2, and 3 in order.";
     } catch (error) {
       status.textContent = error.message || "Could not prepare the slides. Please try again.";
     } finally {
@@ -290,7 +436,7 @@
   });
   copyButtons.forEach(button => button.addEventListener("click", async () => {
     const index = Number(button.dataset.slide);
-    if (generatedRevision !== revision || !blobs[index]) return;
+    if (copyButtons[index].disabled || !blobs[index]) return;
     try {
       if (!navigator.clipboard?.write || !window.ClipboardItem) throw new Error("Clipboard unavailable");
       // Blobs are already ready: the clipboard write stays inside the user gesture,
