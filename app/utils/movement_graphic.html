@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; font-family: system-ui, sans-serif; color: #172b45; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { padding: 10px 16px; border: 1px solid #bdcbd9; border-radius: 7px;
+      color: #172b45; background: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+    button:hover { background: #edf4fb; border-color: #28669c; }
+    button:focus-visible { outline: 3px solid #398ddd; outline-offset: 2px; }
+    button:disabled { opacity: .55; cursor: default; }
+    p { margin: 10px 0; font-size: 14px; line-height: 1.5; }
+    #movement-image { display: block; width: 100%; max-width: 720px; height: auto; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="actions">
+    <button id="copy-graphic" type="button" disabled>Copy graphic</button>
+    <button id="retry-graphic" type="button" hidden>Retry graphic</button>
+    <button id="toggle-graphic" type="button" hidden aria-controls="movement-image">Hide graphic</button>
+  </div>
+  <p id="graphic-status" role="status" aria-live="polite">Preparing your graphic…</p>
+  <p>2160 × 2700 PNG (4:5). Copy and paste into your post, or right-click the image and choose Copy Image.</p>
+  <img id="movement-image" alt="Biggest ranking risers on the left and fallers on the right, with team logos and previous and current ranks" hidden />
+  <script>
+  (() => {
+    const config = __MOVEMENT_CONFIG__;
+    const width = 2160, height = 2700;
+    const navy = "#0c2c50", gold = "#e4bd72";
+    const headingFont = 'Impact, "Arial Narrow", "Helvetica Neue", sans-serif';
+    const status = document.getElementById("graphic-status");
+    const image = document.getElementById("movement-image");
+    const copyButton = document.getElementById("copy-graphic");
+    const retryButton = document.getElementById("retry-graphic");
+    const toggleButton = document.getElementById("toggle-graphic");
+    let png = null;
+    let previewUrl = null;
+
+    new ResizeObserver(() => {
+      try {
+        const frame = window.frameElement;
+        if (frame) {
+          frame.style.height = `${Math.ceil(document.body.getBoundingClientRect().height) + 12}px`;
+          const container = frame.closest('[data-testid="stElementContainer"]');
+          if (container) container.style.height = "auto";
+        }
+      } catch (_) { /* Scrolling remains available on restricted hosts. */ }
+    }).observe(document.body);
+
+    function fitText(context, text, x, y, available, size, font = headingFont) {
+      do {
+        context.font = `400 ${size}px ${font}`;
+        if (context.measureText(text).width <= available) break;
+        size -= 1;
+      } while (size > 24);
+      context.fillText(text, x, y);
+    }
+
+    function drawMovementGraphic(context, logos) {
+      context.fillStyle = "#edf0f3";
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = navy;
+      context.fillRect(0, 0, width, 308);
+      context.fillStyle = gold;
+      context.fillRect(0, 300, width, 8);
+      context.textBaseline = "top";
+      context.textAlign = "left";
+      fitText(context, "BG.ANALYTICS CFB", 80, 62, 1110, 48);
+      context.fillStyle = "#ffffff";
+      fitText(context, "RANK MOVERS", 80, 132, 1110, 112);
+      context.textAlign = "right";
+      context.fillStyle = gold;
+      fitText(context, `${config.season} SEASON`, 2080, 42, 810, 86);
+      context.fillStyle = "#ffffff";
+      fitText(context, config.poll ? "POLL" : "RATINGS", 2080, 168, 810, 96);
+      context.textAlign = "left";
+      context.fillStyle = navy;
+      fitText(context, config.source.toUpperCase(), 80, 382, 2000, 98);
+      fitText(context, config.comparison.toUpperCase(), 80, 502, 2000, 52, "Arial, sans-serif");
+      if (config.blend) {
+        context.fillStyle = "#41546b";
+        fitText(context, config.blend, 80, 576, 2000, 36, "Arial, sans-serif");
+      }
+      const columns = [
+        { x: 80, label: "BIGGEST RISERS", direction: "UP", color: "#126746", rows: config.risers },
+        { x: 1112, label: "BIGGEST FALLERS", direction: "DOWN", color: "#a3293b", rows: config.fallers },
+      ];
+      for (const column of columns) {
+        context.fillStyle = column.color;
+        fitText(context, column.label, column.x, 654, 968, 72);
+        context.fillRect(column.x, 750, 968, 7);
+        if (!column.rows.length) {
+          context.fillStyle = "#ffffff";
+          context.fillRect(column.x, 796, 968, 330);
+          context.fillStyle = navy;
+          fitText(context, column.direction === "UP" ? "NO RISERS" : "NO FALLERS", column.x + 36, 858, 896, 72);
+          context.fillStyle = "#41546b";
+          fitText(context, "In this comparison", column.x + 36, 962, 896, 46, "Arial, sans-serif");
+        }
+        column.rows.forEach((team, index) => {
+          const y = 796 + index * 342;
+          context.fillStyle = "#ffffff";
+          context.fillRect(column.x, y, 968, 322);
+          context.fillStyle = column.color;
+          context.fillRect(column.x, y, 7, 322);
+          const logo = logos.get(team.name);
+          const scale = Math.min(156 / logo.width, 156 / logo.height);
+          context.drawImage(logo, column.x + 118 - logo.width * scale / 2,
+            y + 108 - logo.height * scale / 2, logo.width * scale, logo.height * scale);
+          context.fillStyle = navy;
+          fitText(context, team.name.toUpperCase(), column.x + 220, y + 30, 716, 62);
+          fitText(context, `#${team.previousRank} → #${team.currentRank}`, column.x + 220, y + 111, 716, 58, "Arial, sans-serif");
+          if (!config.poll && team.previousRating !== null && team.currentRating !== null) {
+            context.fillStyle = "#41546b";
+            fitText(context, `Rating ${team.previousRating.toFixed(1)} → ${team.currentRating.toFixed(1)}`,
+              column.x + 220, y + 192, 716, 38, "Arial, sans-serif");
+          }
+          const places = Math.abs(team.change);
+          context.fillStyle = column.color;
+          fitText(context, `${column.direction} ${places} ${places === 1 ? "PLACE" : "PLACES"}`,
+            column.x + 32, y + 250, 904, 58);
+        });
+      }
+      context.fillStyle = "#41546b";
+      const note = config.poll
+        ? "Ranked in both polls. New and dropped teams have no exact rank change."
+        : "Largest rank changes among FBS teams rated on both comparison dates.";
+      fitText(context, note, 80, 2570, 2000, 36, "Arial, sans-serif");
+      fitText(context, "Previous rank → Current rank", 80, 2628, 2000, 32, "Arial, sans-serif");
+    }
+
+    function loadImage(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const timeout = setTimeout(() => reject(new Error("Image request timed out")), 20000);
+        img.onload = () => { clearTimeout(timeout); resolve(img); };
+        img.onerror = () => { clearTimeout(timeout); reject(new Error("Image could not be loaded")); };
+        // Same server-embedded full-resolution PNGs as the conquest map.
+        // CORS is only needed if the server download had to fall back to a URL.
+        if (!url.startsWith("data:") && !url.startsWith("blob:")) img.crossOrigin = "anonymous";
+        img.src = url;
+      });
+    }
+
+    async function prepareGraphic() {
+      retryButton.hidden = true;
+      copyButton.disabled = true;
+      status.textContent = "Preparing your full-resolution graphic…";
+      let nextUrl = null;
+      try {
+        const teams = new Map([...config.risers, ...config.fallers].map(team => [team.name, team]));
+        const logos = new Map(await Promise.all([...teams.values()].map(async team => {
+          try {
+            if (!team.logo) throw new Error("No logo is available");
+            return [team.name, await loadImage(team.logo)];
+          } catch (error) {
+            throw new Error(`${team.name}: ${error.message}. Refresh the page and show the graphic to retry.`);
+          }
+        })));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        drawMovementGraphic(canvas.getContext("2d"), logos);
+        const nextPng = await new Promise((resolve, reject) => canvas.toBlob(blob => {
+          if (blob) resolve(blob); else reject(new Error("Could not prepare the PNG. Try again."));
+        }, "image/png"));
+        nextUrl = URL.createObjectURL(nextPng);
+        await loadImage(nextUrl);
+        image.src = nextUrl;
+        image.hidden = false;
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = nextUrl;
+        png = nextPng;
+        copyButton.disabled = false;
+        toggleButton.hidden = false;
+        toggleButton.textContent = "Hide graphic";
+        status.textContent = "Ready. Copy the graphic and paste it into your post.";
+      } catch (error) {
+        if (nextUrl) URL.revokeObjectURL(nextUrl);
+        status.textContent = error.message;
+        retryButton.hidden = false;
+      }
+    }
+    retryButton.addEventListener("click", prepareGraphic);
+    toggleButton.addEventListener("click", () => {
+      image.hidden = !image.hidden;
+      toggleButton.textContent = image.hidden ? "Show graphic" : "Hide graphic";
+    });
+    copyButton.addEventListener("click", async () => {
+      if (!png) return;
+      try {
+        if (!navigator.clipboard?.write || !window.ClipboardItem) throw new Error("Clipboard unavailable");
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+        status.textContent = "Graphic copied at full resolution. Paste it into your post.";
+      } catch (_) {
+        image.hidden = false;
+        toggleButton.textContent = "Hide graphic";
+        status.textContent = "Your browser blocked the copy button. Right-click the image and choose Copy Image (on a phone, touch and hold).";
+      }
+    });
+    prepareGraphic();
+  })();
+  </script>
+</body>
+</html>

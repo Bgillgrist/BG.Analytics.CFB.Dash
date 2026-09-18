@@ -4,8 +4,10 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from utils.db import read_df
+from utils.movement_graphic import movement_graphic_controls
 from utils.rankings_analysis import (
     blend_rating_snapshot, build_bubble_watch, build_poll_comparison, build_rank_movements,
     comparison_date_bounds, disagreement_shortlists, movement_shortlists, ranked_teams,
@@ -1255,12 +1257,25 @@ def movement_rows(frame: pd.DataFrame, *, poll: bool, membership: str = "") -> l
     return rows
 
 
-def render_movement_panels(movement: pd.DataFrame, *, poll: bool) -> None:
+def render_movement_panels(
+    movement: pd.DataFrame, *, poll: bool, season: int,
+    source_label: str, comparison_label: str, blend_label: str = "",
+) -> None:
     risers, fallers = movement_shortlists(movement)
     render_analysis_pair(
         analysis_panel_html("Biggest risers", movement_rows(risers, poll=poll), "No rank increases in this comparison.", "analysis-green"),
         analysis_panel_html("Biggest fallers", movement_rows(fallers, poll=poll), "No rank decreases in this comparison.", "analysis-red"),
     )
+    if st.button("Show Instagram graphic", key=f"movement_graphic_{'poll' if poll else 'ratings'}"):
+        with st.spinner("Preparing the team logos…"):
+            graphic = movement_graphic_controls(
+                risers, fallers, season=season, source_label=source_label,
+                comparison_label=comparison_label, poll=poll, blend_label=blend_label,
+            )
+        if hasattr(st, "iframe"):
+            st.iframe(graphic, height="content")
+        else:
+            components.html(graphic, height=1060, scrolling=True)
     entrants = movement.loc[movement["entered_top25"]].sort_values(["current_rank", "team"])
     departures = movement.loc[movement["left_top25"]].sort_values(["previous_rank", "team"])
     render_analysis_pair(
@@ -1287,7 +1302,11 @@ def render_poll_movement(poll_df, poll, poll_label, season, week, weeks):
         st.info("The earlier poll has no rankings available for comparison.")
         return
     st.caption(f"{poll_label} · {season} · Week {previous_week} → Week {week}. New and dropped teams have no exact rank change outside the Top 25.")
-    render_movement_panels(build_rank_movements(poll_df, previous, poll=True), poll=True)
+    render_movement_panels(
+        build_rank_movements(poll_df, previous, poll=True), poll=True,
+        season=season, source_label=poll_label,
+        comparison_label=f"Week {previous_week} → Week {week}",
+    )
 
 
 def render_ratings_movement(power_df, season, actual_date, run_dates, weight):
@@ -1331,7 +1350,12 @@ def render_ratings_movement(power_df, season, actual_date, run_dates, weight):
             coverage = frame.get("teamrankings_scaled_rating", pd.Series(np.nan, index=frame.index)).notna()
             if not coverage.all():
                 st.caption(f"{label}: {int((~coverage).sum())} teams use BG-only ratings because a usable TeamRankings blend is unavailable.")
-    render_movement_panels(build_rank_movements(power_df, previous), poll=False)
+    render_movement_panels(
+        build_rank_movements(power_df, previous), poll=False, season=season,
+        source_label="BG Power Ratings",
+        comparison_label=f"{format_date(previous_date)} → {format_date(actual_date)}",
+        blend_label=f"TeamRankings blend: {weight:.0%}",
+    )
 
 
 def render_poll_list(df: pd.DataFrame, title: str, meta: str) -> None:

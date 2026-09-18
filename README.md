@@ -23,6 +23,14 @@ the same TeamRankings blend to both snapshots using their respective historical
 data. Poll movement uses the previous available week. Posting PNG/ZIP exports have
 been replaced by this analysis.
 
+The **Biggest risers / Biggest fallers** sections in both the Poll and Ratings
+tabs include **Show Instagram graphic**. It creates a 2160 × 2700 PNG (4:5) with
+the current comparison's top five risers and fallers, prominent team logos, and
+old/new ranks. Ratings include old/new rating values and the selected blend.
+Use **Copy graphic** or right-click **Copy Image**, as on the conquest map; no
+download is needed. Changing comparison controls clears the preview so the next
+graphic uses the new selection. Logos load only when the button is pressed.
+
 The **League Wide → Predictions** page reads successful manual/nightly season
 snapshots and provides sortable team projections, conference races, and comparisons
 to a calendar date. If that day has no snapshot, the latest available snapshot on

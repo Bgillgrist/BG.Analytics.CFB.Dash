@@ -1,6 +1,8 @@
 """Streamlit interactions with deterministic poll, ratings, and blend snapshots."""
 
 import sys
+import json
+import re
 from datetime import date
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from streamlit.testing.v1 import AppTest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 from utils import db
+from utils import movement_graphic
 from utils.rankings_analysis import blend_rating_snapshot
 
 
@@ -182,3 +185,40 @@ def test_missing_history_and_poll_are_local_empty_states(page):
     assert any("comparison ratings could not be loaded" in element.value for element in app.info)
     assert "Most overrated by the poll" not in markdown(app)
     assert "Just outside the ratings’ Top 25" in markdown(app)
+
+
+@pytest.mark.parametrize("kind", ["poll", "ratings"])
+def test_movement_graphic_is_on_demand_and_uses_current_comparison(page, monkeypatch, kind):
+    app, _, _ = page
+    generated = []
+    original = movement_graphic.movement_graphic_controls
+
+    def record(*args, **kwargs):
+        generated.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(movement_graphic, "movement_graphic_controls", record)
+    app.run()
+    assert not app.exception
+    assert generated == []
+    assert not app.get("iframe")
+    if kind == "ratings":
+        widget(app.date_input, "Compare ratings with date").set_value(date(2026, 9, 2)).run()
+        widget(app.slider, "TeamRankings Blend").set_value(.75).run()
+    app.button(key=f"movement_graphic_{kind}").click().run()
+    assert not app.exception
+    assert len(generated) == 1
+    config = json.loads(re.search(r"const config = (.*);", app.get("iframe")[0].proto.srcdoc).group(1))
+    assert config["season"] == "2026"
+    assert config["poll"] is (kind == "poll")
+    if kind == "poll":
+        assert config["comparison"] == "Week 1 → Week 2"
+        assert config["source"] == "AP Poll"
+        widget(app.selectbox, "Poll Week").select(1).run()
+    else:
+        assert config["comparison"] == "Sep 1, 2026 → Sep 7, 2026"
+        assert config["blend"] == "TeamRankings blend: 75%"
+        widget(app.slider, "TeamRankings Blend").set_value(0.).run()
+    assert not app.exception
+    assert not app.get("iframe")
+    assert len(generated) == 1
