@@ -6,9 +6,15 @@ import pandas as pd
 import streamlit as st
 
 from utils.weekly_performances import (
-    METRIC_LABELS, PRESETS, best_ascending, effective_mode, filter_performances,
+    GRADE_COLUMNS, METRIC_LABELS, PRESETS, best_ascending, build_grade_comparison,
+    effective_mode, filter_performances, load_grade_baselines,
     load_available_weeks, load_week, metric_label, rank_performances, sort_performances,
 )
+
+
+@st.cache_data(ttl=300)
+def get_grade_baselines(season):
+    return load_grade_baselines(season)
 
 
 @st.cache_data(ttl=300)
@@ -181,9 +187,16 @@ for container, side in zip(st.columns(2), ("offense", "defense")):
         render_leader(ranked[(side, "Overall")], side, requested)
 st.caption("Headline leaders cover the full week. Each row is one game, including when a team has multiple games in the selected week.")
 
+grades = None
+try:
+    season_stats, game_stats = get_grade_baselines(int(season))
+    grades = build_grade_comparison(frame, season_stats, game_stats)
+except Exception:
+    pass  # Keep weekly leaderboards usable when report-card data is unavailable.
+filter_options = grades if grades is not None else frame
 first, second = st.columns(2)
-conferences = first.multiselect("Conferences", sorted(frame["conference"].unique()), placeholder="All conferences")
-team_options = sorted(filter_performances(frame, conferences)["team"].unique())
+conferences = first.multiselect("Conferences", sorted(filter_options["conference"].unique()), placeholder="All conferences")
+team_options = sorted(filter_performances(filter_options, conferences)["team"].unique())
 teams = second.multiselect("Teams", team_options, placeholder="All teams")
 
 with st.expander("How BG adjustment works"):
@@ -199,3 +212,25 @@ with offense_tab:
     render_side(ranked, "offense", requested, conferences, teams)
 with defense_tab:
     render_side(ranked, "defense", requested, conferences, teams)
+
+st.subheader("Season & game grades")
+st.caption(f"{season} season so far · {phase.title()} season, Week {week} game grades · 0–100 scale; higher is better")
+st.write("Offense and defense use the numeric PPA percentile grades behind the report cards. "
+         "Each overall grade is the average of its offense and defense grades.")
+st.caption("Season grades use the latest available season totals, even when viewing an earlier week. "
+           "Game grades compare against all FBS-vs-FBS team-games in that season, as on the game report card. "
+           "Conference/team filters and ranking mode do not change grades. "
+           "Multiple games in a week are averaged per team. — means no qualifying game or missing data.")
+if grades is None:
+    st.warning("Report-card grades could not be loaded. Try again after checking the season and game statistics.")
+else:
+    displayed_grades = filter_performances(grades, conferences, teams)
+    if displayed_grades.empty:
+        st.info("No team grades match these filters. Clear the conference or team selection.")
+    else:
+        st.dataframe(displayed_grades[["team", *GRADE_COLUMNS]], hide_index=True, use_container_width=True,
+                     height=min(640, 38 + 35 * len(displayed_grades)), key="weekly_grades_table",
+                     column_config={"team": st.column_config.TextColumn("Team"), **{
+                         column: st.column_config.NumberColumn(label, format="%.1f")
+                         for column, label in GRADE_COLUMNS.items()
+                     }})

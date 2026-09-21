@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from utils.db import read_df
+from utils.report_card_grades import percentile_grade
 
 # ============================
 # STYLING
@@ -192,19 +193,7 @@ def league_percentile_for_stat(season: int, stat_col: str, value: float, higher_
         params={"season": int(season)},
     )
 
-    # If we have no baseline data, fall back to neutral percentile.
-    if df.empty:
-        return 50.0
-
-    s = df["v"].astype(float)
-    if not higher_is_better:
-        s = -s
-        value = -float(value)
-
-    # Include the current value as an additional observation and compute its percentile rank.
-    s2 = pd.concat([s, pd.Series([float(value)])], ignore_index=True)
-    pct = float(s2.rank(pct=True).iloc[-1]) * 100.0
-    return pct
+    return percentile_grade(df["v"], value, higher_is_better)
 
 
 def grade_from_percentile(pct: float) -> tuple[str, str, str]:

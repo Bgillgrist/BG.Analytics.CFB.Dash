@@ -7,8 +7,18 @@ tested without a database or a running page.
 import numpy as np
 import pandas as pd
 
+from utils.report_card_grades import percentile_grade
+
 
 OPPONENT_WEIGHT = 0.25
+GRADE_COLUMNS = {
+    "season_offense": "Season offense",
+    "season_defense": "Season defense",
+    "game_offense": "Game offense",
+    "game_defense": "Game defense",
+    "season_overall": "Season overall",
+    "game_overall": "Game overall",
+}
 PRESETS = {
     "Overall": ("ppa", ["successrate", "explosiveness", "plays"]),
     "Passing": ("passingplays_ppa", ["passingplays_successrate", "passingplays_explosiveness"]),
@@ -109,6 +119,58 @@ def load_week(season, season_type, week):
 
 def numeric(series):
     return pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+
+def load_grade_baselines(season):
+    """Load both report-card populations once per season, not once per team."""
+    from utils.db import read_df
+
+    params = {"season": int(season)}
+    season_stats = read_df("""
+        SELECT team, conference, offense_ppa, defense_ppa
+        FROM public.team_advanced_season_stats
+        WHERE season = :season
+    """, params=params)
+    game_stats = read_df("""
+        SELECT gs.offense_ppa, gs.defense_ppa
+        FROM public.team_advanced_game_stats gs
+        JOIN public.game_data gd ON gd.id = gs.game_id
+        WHERE gd.season = :season
+          AND gd.homeclassification = 'fbs'
+          AND gd.awayclassification = 'fbs'
+    """, params=params)
+    return season_stats, game_stats
+
+
+def build_grade_comparison(frame, season_stats, game_stats):
+    """One row per team with season and selected-week report-card grades.
+
+    Season values are the latest stored season totals, as on the season report
+    card. Game values use the game report card's full-season team-game baseline.
+    If a team plays twice in a week, average its individual game grades.
+    """
+    season_stats = season_stats.reindex(columns=["team", "conference", "offense_ppa", "defense_ppa"])
+    game_stats = game_stats.reindex(columns=["offense_ppa", "defense_ppa"])
+    season_grades = season_stats[["team", "conference"]].copy()
+    game_grades = frame[["team"]].copy()
+    for side in ("offense", "defense"):
+        column = f"{side}_ppa"
+        season_baseline = numeric(season_stats[column])
+        game_baseline = numeric(game_stats[column])
+        season_grades[f"season_{side}"] = season_baseline.map(
+            lambda value: percentile_grade(season_baseline, value, side == "offense"))
+        values = numeric(frame[column]).where(numeric(frame[f"{side}_plays"]) > 0)
+        game_grades[f"game_{side}"] = values.map(
+            lambda value: percentile_grade(game_baseline, value, side == "offense"))
+    game_grades = game_grades.groupby("team", as_index=False).agg(
+        {f"game_{side}": lambda values: values.mean(skipna=False) for side in ("offense", "defense")})
+    result = season_grades.merge(game_grades, on="team", how="outer", validate="one_to_one")
+    conferences = frame.drop_duplicates("team").set_index("team")["conference"]
+    result["conference"] = result["team"].map(conferences).fillna(result["conference"]).fillna("Unknown")
+    for scope in ("season", "game"):
+        result[f"{scope}_overall"] = (result[f"{scope}_offense"] + result[f"{scope}_defense"]) / 2
+    return result.sort_values(["game_overall", "season_overall", "team"],
+                              ascending=[False, False, True], na_position="last").reset_index(drop=True)
 
 
 def prepare_games(rows):

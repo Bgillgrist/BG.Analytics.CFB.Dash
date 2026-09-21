@@ -50,6 +50,15 @@ unblended, successful manual/nightly snapshots completed strictly before kickoff
 Without a reliable kickoff or saved pregame rating, performances remain available
 in raw rankings. Conference/team filters do not recalculate weekly ranks.
 
+The **Season & game grades** section lists each team with six numeric grades:
+season offense/defense, selected-week game offense/defense, and season/game
+overall (the average of offense and defense). Grades use the same 0–100 PPA
+percentiles as the report cards: season grades use current stored season totals;
+game grades use the selected games against the full season's FBS-vs-FBS game
+population. Selecting an earlier week does not rewind season totals. Bye teams
+retain season grades, missing grades stay blank, and multiple games in a week
+are averaged per team. Existing conference/team filters apply to this table.
+
 Run all data and optional Streamlit interaction tests with `python -m pytest tests -q`.
 Weekly query and scoring tests are in `tests/test_weekly_performances.py`; its page
 interaction tests require Streamlit. No database writes or export controls are added.
