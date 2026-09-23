@@ -15,6 +15,15 @@ to finish the carousel. Rankings tests: `node --test tests/test_conquest_ranking
 Moving or duplicating a logo prompts you to update the slides before copying.
 No download or export is needed.
 
+Below the Conquest Map scope, territory mode, and week controls, expand
+**Alternate team colors** or **Alternate team logos** to choose each independently.
+UCLA and Mississippi State start with alternate colors; teams with dark/alternate
+logos start selected to preserve the existing map appearance. Removing a team
+restores its primary asset. Missing alternate assets fall back to the available
+version. Selections persist during the session across map-rule and season changes;
+editing appearance retains the selected scope, mode, and week. Team colors affect
+Team territory mode, and logo choices also carry into the team rankings slide.
+
 **Team Rankings → Rankings Analysis** compares the selected poll with the selected
 ratings blend using full rank gaps; unranked poll teams show minimum gaps. It also
 shows Top 25 agreement, bubble teams, and movement. Ratings movement uses a chosen

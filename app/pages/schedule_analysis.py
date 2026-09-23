@@ -10,6 +10,7 @@ import streamlit.components.v1 as components
 from utils.db import read_df
 from utils.conquest_slide_runtime import load_slide_helpers
 from utils.schedule_awards import build_award_shortlists, shortlist_table
+from utils.conquest_appearance import apply_team_appearance, render_team_appearance_controls
 
 
 conquest_slides = load_slide_helpers()
@@ -47,13 +48,6 @@ CONFERENCE_LOGO_FONT_SIZE = 8
 TEAM_LOGO_RADIUS = 18
 TEAM_LOGO_SIZE = 30
 TEAM_LOGO_FONT_SIZE = 8
-
-# Add team names here when team territory mode should use the secondary color
-# from team_map instead of the primary color.
-USE_SECONDARY_COLOR_FOR_TEAMS = {
-    "UCLA",
-    "Mississippi State",
-}
 
 # Manually maintain conquest-map conference colors and logo PNG URLs here.
 DEFAULT_CONFERENCE_ASSETS = {
@@ -648,7 +642,7 @@ def get_venue_map() -> pd.DataFrame:
 
 
 def get_team_assets() -> pd.DataFrame:
-    # Reapply the current color overrides on every rerun; get_team_map caches the database read.
+    # Keep primary assets intact; map appearance preferences are applied at render time.
     team_map = get_team_map()
     if team_map.empty:
         return pd.DataFrame(columns=TEAM_ASSET_COLUMNS)
@@ -681,15 +675,6 @@ def get_team_assets() -> pd.DataFrame:
         source_col = first_existing(columns, candidates)
         assets[output_col] = team_map[source_col] if source_col else None
     assets["map_venue_id"] = assets["map_venue_id"].map(normalize_id)
-
-    secondary_override_keys = {team_key(team) for team in USE_SECONDARY_COLOR_FOR_TEAMS}
-    if secondary_override_keys:
-        secondary_values = assets["team_secondary_color"].astype(str).str.strip()
-        valid_secondary = assets["team_secondary_color"].notna() & ~secondary_values.str.lower().isin(
-            {"", "nan", "none", "null"}
-        )
-        use_secondary = assets["team_key"].isin(secondary_override_keys) & valid_secondary
-        assets.loc[use_secondary, "team_color"] = assets.loc[use_secondary, "team_secondary_color"]
 
     return assets[TEAM_ASSET_COLUMNS]
 
@@ -998,6 +983,8 @@ def build_county_conquest_map(
     *,
     season: int,
     checkpoint: str,
+    alternate_color_teams: list[str] | None = None,
+    alternate_logo_teams: list[str] | None = None,
 ) -> str:
     if teams.empty:
         return ""
@@ -1008,6 +995,9 @@ def build_county_conquest_map(
     lookup_teams = teams if owner_teams is None else pd.concat([teams, owner_teams], ignore_index=True)
     lookup_teams = lookup_teams.copy()
     lookup_teams["team_key"] = lookup_teams["team"].map(team_key)
+    lookup_teams = apply_team_appearance(
+        lookup_teams.reset_index(drop=True), alternate_color_teams, alternate_logo_teams
+    )
     team_lookup = (
         lookup_teams.drop_duplicates(subset=["team_key"])
         .set_index("team_key")[team_lookup_columns]
@@ -1027,7 +1017,7 @@ def build_county_conquest_map(
         }
         if map_mode == "Team":
             display_color = safe_text(owner.get("team_color"), "#64748b") or "#64748b"
-            logo = safe_text(owner.get("team_logo_dark"), "") or safe_text(owner.get("team_logo"), "")
+            logo = safe_text(owner.get("team_logo"), "") or safe_text(owner.get("team_logo_dark"), "")
             logo_name = owner_team
             logo_key = f"team:{owner_key}"
             logo_radius = TEAM_LOGO_RADIUS
@@ -1055,7 +1045,7 @@ def build_county_conquest_map(
                 "lon": float(row.longitude),
                 "color": display_color,
                 "logo": logo,
-                "logoFallback": safe_text(owner.get("team_logo"), "") if map_mode == "Team" else "",
+                "logoFallback": safe_text(owner.get("team_logo_dark"), "") if map_mode == "Team" else "",
                 "logoName": logo_name,
                 "logoGroupKey": logo_key,
                 "logoRadius": logo_radius,
@@ -1636,12 +1626,14 @@ with scope_col:
         "Map Scope",
         ["Power 4 + Notre Dame", P4_PROMOTIONS_MAP_SCOPE, "G6 + UConn", ALL_MAP_SCOPE],
         horizontal=False,
+        key="conquest_map_scope",
     )
 with mode_control_col:
     map_mode = st.radio(
         "Territory Mode",
         ["Conference", "Team"],
         horizontal=False,
+        key="conquest_territory_mode",
     )
 
 p4_team_mask = teams["conference"].isin(POWER_FOUR_CONFERENCES) | teams["team_key"].isin(NOTRE_DAME_TEAM_KEYS)
@@ -1684,6 +1676,8 @@ with map_control_col:
         key=f"conquest_map_checkpoint_{selected_season}_{map_scope.replace(' ', '_')}",
     )
 
+alternate_color_teams, alternate_logo_teams = render_team_appearance_controls(teams)
+
 if map_teams.empty:
     st.info("No home-stadium coordinates are available for the selected conquest map scope.")
 else:
@@ -1707,6 +1701,8 @@ else:
         map_scope=map_scope,
         season=selected_season,
         checkpoint=map_checkpoint,
+        alternate_color_teams=alternate_color_teams,
+        alternate_logo_teams=alternate_logo_teams,
     )
     if map_html:
         if hasattr(st, "iframe"):
