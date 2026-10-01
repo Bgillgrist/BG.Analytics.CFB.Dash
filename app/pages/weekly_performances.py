@@ -5,6 +5,14 @@ import html
 import pandas as pd
 import streamlit as st
 
+from utils.weekly_performances_runtime import load_weekly_helpers
+
+try:
+    weekly_helpers = load_weekly_helpers()
+except RuntimeError as exc:
+    st.error(str(exc))
+    st.stop()
+
 from utils.weekly_performances import (
     GRADE_COLUMNS, GRADE_CONTEXT_COLUMNS, METRIC_LABELS, PRESETS, best_ascending, build_grade_comparison,
     effective_mode, filter_performances, load_grade_baselines,
@@ -13,7 +21,8 @@ from utils.weekly_performances import (
 
 
 @st.cache_data(ttl=300)
-def get_grade_baselines(season):
+def get_grade_baselines(season, grade_api_version):
+    # The explicit version argument invalidates old cached baseline schemas.
     return load_grade_baselines(season)
 
 
@@ -189,7 +198,7 @@ st.caption("Headline leaders cover the full week. Each row is one game, includin
 
 grades = None
 try:
-    season_stats, game_stats = get_grade_baselines(int(season))
+    season_stats, game_stats = get_grade_baselines(int(season), weekly_helpers.WEEKLY_API_VERSION)
     grades = build_grade_comparison(frame, season_stats, game_stats, mode=requested)
 except Exception:
     pass  # Keep weekly leaderboards usable when report-card data is unavailable.

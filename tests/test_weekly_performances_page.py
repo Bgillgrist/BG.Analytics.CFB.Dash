@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -12,6 +13,7 @@ from streamlit.testing.v1 import AppTest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 from utils import weekly_performances as weekly
+from utils import weekly_performances_runtime as runtime
 
 
 def widget(elements, label):
@@ -203,3 +205,58 @@ def test_grade_data_failure_keeps_existing_leaderboards(page, monkeypatch):
     assert not page.exception
     assert len(page.dataframe) == 2
     assert any("Report-card grades could not be loaded" in message.value for message in page.warning)
+
+
+def test_page_recovers_stale_helper_before_importing_grade_columns(page, monkeypatch):
+    current_columns = weekly.GRADE_CONTEXT_COLUMNS
+    current_version = weekly.WEEKLY_API_VERSION
+    monkeypatch.delattr(weekly, "GRADE_CONTEXT_COLUMNS")
+    monkeypatch.delattr(weekly, "WEEKLY_API_VERSION")
+    reloaded = []
+
+    def reload_helper(module):
+        assert module is weekly
+        reloaded.append(module)
+        # Keep the fixture's database doubles while simulating the disk reload.
+        monkeypatch.setattr(module, "GRADE_CONTEXT_COLUMNS", current_columns, raising=False)
+        monkeypatch.setattr(module, "WEEKLY_API_VERSION", current_version, raising=False)
+        return module
+
+    monkeypatch.setattr(runtime, "reload", reload_helper)
+    page.run()
+    assert not page.exception
+    assert len(reloaded) == 1
+    assert page.dataframe[2].value.season_overall.notna().all()
+    page.run()
+    assert not page.exception
+    assert len(reloaded) == 1
+
+
+def test_grade_cache_is_invalidated_when_helper_contract_changes(page, monkeypatch):
+    original_load = weekly.load_grade_baselines
+    calls = []
+
+    def tracked_load(season):
+        calls.append(season)
+        return original_load(season)
+
+    monkeypatch.setattr(weekly, "load_grade_baselines", tracked_load)
+    page.run()
+    page.run()
+    assert not page.exception
+    assert calls == [2026]
+    monkeypatch.setattr(runtime, "load_weekly_helpers", lambda: SimpleNamespace(WEEKLY_API_VERSION=3))
+    page.run()
+    assert not page.exception
+    assert calls == [2026, 2026]
+
+
+def test_incomplete_deployment_shows_recovery_message_without_traceback(page, monkeypatch):
+    def unavailable():
+        raise RuntimeError("Deploy app/utils/weekly_performances.py with the updated page, then reboot the app.")
+
+    monkeypatch.setattr(runtime, "load_weekly_helpers", unavailable)
+    page.run()
+    assert not page.exception
+    assert len(page.dataframe) == 0
+    assert any("reboot the app" in message.value for message in page.error)

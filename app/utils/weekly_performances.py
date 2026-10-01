@@ -10,6 +10,8 @@ import pandas as pd
 from utils.report_card_grades import percentile_grade
 
 
+# Bump when the page/helper contract or cached grade-baseline shape changes.
+WEEKLY_API_VERSION = 2
 OPPONENT_WEIGHT = 0.25
 GRADE_COLUMNS = {
     "season_offense": "Season offense",
