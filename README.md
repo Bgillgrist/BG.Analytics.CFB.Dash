@@ -61,12 +61,31 @@ in raw rankings. Conference/team filters do not recalculate weekly ranks.
 
 The **Season & game grades** section lists each team with six numeric grades:
 season offense/defense, selected-week game offense/defense, and season/game
-overall (the average of offense and defense). Grades use the same 0–100 PPA
-percentiles as the report cards: season grades use current stored season totals;
-game grades use the selected games against the full season's FBS-vs-FBS game
-population. Selecting an earlier week does not rewind season totals. Bye teams
-retain season grades, missing grades stay blank, and multiple games in a week
-are averaged per team. Existing conference/team filters apply to this table.
+overall (the percentile of offensive PPA minus defensive PPA allowed). **Raw PPA**
+uses one FBS percentile scale. **BG-adjusted** applies to all six grades and uses
+separate P4 and G5 percentile scales. P4 includes SEC, ACC, Big Ten, Big 12, and
+Notre Dame; G5 denotes all other FBS teams, including Pac-12 and other independents,
+using conferences recorded for the selected season. These are within-group grades,
+not directly comparable across the two groups.
+
+Adjusted game scores add 0.25 times pregame opponent strength z-score to performance
+z-score, standardized against the entire season's eligible completed FBS-vs-FBS
+team-games (regular season and postseason). Season scores standardize current
+stored FBS season PPA, then add 0.25 times the equally weighted mean opponent
+strength across completed FBS matchups. Defense reverses PPA; overall uses net PPA
+and receives the opponent bonus once. Final scores use the existing percentile
+tie convention within each peer group, requiring at least two valid observations.
+The leaderboards above continue to standardize performance within the selected week.
+
+Adjusted season grades require pregame ratings for every completed FBS matchup,
+including schedule games with missing advanced stats. The table shows season/week
+rated-game coverage and availability; missing ratings never fall back silently to
+raw grades. Switch to Raw PPA to see unadjusted grades. Stored season totals keep
+their source coverage; the schedule bonus covers FBS opponents only. Selecting an
+earlier week does not rewind season totals. Bye teams retain season grades, missing
+grades stay blank, and multiple games in a week are graded individually before
+averaging per team. Conference/team filters never change the grade populations.
+Standalone report cards are unchanged.
 
 Run all data and optional Streamlit interaction tests with `python -m pytest tests -q`.
 Weekly query and scoring tests are in `tests/test_weekly_performances.py`; its page

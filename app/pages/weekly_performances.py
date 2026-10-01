@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from utils.weekly_performances import (
-    GRADE_COLUMNS, METRIC_LABELS, PRESETS, best_ascending, build_grade_comparison,
+    GRADE_COLUMNS, GRADE_CONTEXT_COLUMNS, METRIC_LABELS, PRESETS, best_ascending, build_grade_comparison,
     effective_mode, filter_performances, load_grade_baselines,
     load_available_weeks, load_week, metric_label, rank_performances, sort_performances,
 )
@@ -190,7 +190,7 @@ st.caption("Headline leaders cover the full week. Each row is one game, includin
 grades = None
 try:
     season_stats, game_stats = get_grade_baselines(int(season))
-    grades = build_grade_comparison(frame, season_stats, game_stats)
+    grades = build_grade_comparison(frame, season_stats, game_stats, mode=requested)
 except Exception:
     pass  # Keep weekly leaderboards usable when report-card data is unavailable.
 filter_options = grades if grades is not None else frame
@@ -215,22 +215,50 @@ with defense_tab:
 
 st.subheader("Season & game grades")
 st.caption(f"{season} season so far · {phase.title()} season, Week {week} game grades · 0–100 scale; higher is better")
-st.write("Offense and defense use the numeric PPA percentile grades behind the report cards. "
-         "Each overall grade is the average of its offense and defense grades.")
+st.write("Overall grades are percentiles of net PPA: offensive PPA minus defensive PPA allowed. "
+         "Offense rewards higher PPA; defense rewards lower PPA allowed.")
+if requested == "BG-adjusted":
+    st.caption("BG-adjusted grades · Separate P4 and G5 percentile scales; grades describe standing within each group. "
+               "Pregame coverage shows rated/total FBS games. Adjusted season grades require complete coverage. "
+               "Switch to Raw PPA to view unadjusted grades when ratings are unavailable.")
+else:
+    st.caption("Raw PPA grades · All FBS teams share one percentile scale; no opponent-strength bonus is applied.")
 st.caption("Season grades use the latest available season totals, even when viewing an earlier week. "
-           "Game grades compare against all FBS-vs-FBS team-games in that season, as on the game report card. "
-           "Conference/team filters and ranking mode do not change grades. "
+           "Conference/team filters do not change grades. "
            "Multiple games in a week are averaged per team. — means no qualifying game or missing data.")
+with st.expander("How season & game grades work"):
+    st.write("Game baselines include eligible completed FBS-vs-FBS team-games from the regular season and postseason. "
+             "Grade baselines span the season, while the leaderboards above compare only the selected week. "
+             "Stored season totals retain their source coverage; the opponent bonus covers FBS matchups only.")
+    st.write("BG-adjusted scores use performance z-score + 0.25 × pregame opponent strength z-score, then take "
+             "the percentile within the team’s peer group. Game performance is standardized across the entire "
+             "season’s eligible FBS team-games; season performance is standardized across FBS season totals. "
+             "Season opponent strength is the equally weighted average across completed FBS matchups. "
+             "Overall grades receive the opponent bonus once, after calculating net PPA.")
+    st.write("P4 includes SEC, ACC, Big Ten, Big 12, and Notre Dame. G5 means all other FBS teams, including the "
+             "Pac-12 and other independents, using conferences recorded for the selected season. "
+             "Adjusted grades describe standing within each group, so the two scales are not directly comparable.")
+    st.write("Adjusted season grades require pregame ratings for every completed FBS matchup, including games "
+             "missing advanced statistics. Missing game ratings leave adjusted game grades blank. "
+             "Each adjusted percentile needs at least two valid observations in its peer group. "
+             "Both PPA components must be available for an overall grade. Offense and defense game grades "
+             "each require positive play counts; overall game grades require both.")
 if grades is None:
     st.warning("Report-card grades could not be loaded. Try again after checking the season and game statistics.")
 else:
+    if requested == "BG-adjusted" and grades[list(GRADE_COLUMNS)].isna().all().all():
+        st.info("BG-adjusted grades are unavailable for this selection. Switch to Raw PPA for unadjusted grades; "
+                "see the coverage and availability columns for details.")
     displayed_grades = filter_performances(grades, conferences, teams)
     if displayed_grades.empty:
         st.info("No team grades match these filters. Clear the conference or team selection.")
     else:
-        st.dataframe(displayed_grades[["team", *GRADE_COLUMNS]], hide_index=True, use_container_width=True,
+        context_columns = GRADE_CONTEXT_COLUMNS if requested == "BG-adjusted" else {}
+        st.dataframe(displayed_grades[["team", *GRADE_COLUMNS, *context_columns]], hide_index=True, use_container_width=True,
                      height=min(640, 38 + 35 * len(displayed_grades)), key="weekly_grades_table",
                      column_config={"team": st.column_config.TextColumn("Team"), **{
                          column: st.column_config.NumberColumn(label, format="%.1f")
                          for column, label in GRADE_COLUMNS.items()
+                     }, **{
+                         column: st.column_config.TextColumn(label) for column, label in context_columns.items()
                      }})

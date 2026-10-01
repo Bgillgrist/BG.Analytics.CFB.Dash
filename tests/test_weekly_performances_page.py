@@ -54,7 +54,10 @@ def page(monkeypatch):
             dict(team="Bravo", conference="ACC", offense_ppa=.2 * scale, defense_ppa=.2 * scale),
             dict(team="Bye team", conference="Big Ten", offense_ppa=.3 * scale, defense_ppa=.3 * scale),
         ])
-        return season_stats, season_stats[["offense_ppa", "defense_ppa"]]
+        game_stats = season_stats.assign(
+            game_id=1, season=season, offense_plays=60, defense_plays=60,
+            opponent_strength_z=[1., -1., 0.] if season == 2026 else float("nan"))
+        return season_stats, game_stats
 
     monkeypatch.setattr(weekly, "load_grade_baselines", load_grade_baselines)
     yield AppTest.from_file(str(ROOT / "app/pages/weekly_performances.py"), default_timeout=20)
@@ -103,6 +106,13 @@ def test_missing_history_falls_back_to_raw_without_fabricating_scores(page):
     assert any("Showing raw PPA rankings" in message.value for message in page.info)
     assert page.dataframe[0].value.adjusted_score.isna().all()
     assert page.dataframe[0].value.raw_rank.notna().all()
+    grades = page.dataframe[2].value
+    assert grades[list(weekly.GRADE_COLUMNS)].isna().all().all()
+    assert grades.grade_status.str.contains("Incomplete pregame ratings").all()
+    assert any("BG-adjusted grades are unavailable" in message.value for message in page.info)
+    widget(page.radio, "Ranking mode").set_value("Raw PPA").run()
+    assert page.dataframe[2].value.season_overall.notna().all()
+    assert page.dataframe[2].value.game_overall.notna().sum() == 2
 
 
 def test_unavailable_data_has_clear_empty_and_error_states(page, monkeypatch):
@@ -122,6 +132,7 @@ def test_unavailable_data_has_clear_empty_and_error_states(page, monkeypatch):
 
 def test_grade_table_has_six_numeric_grades_and_bye_teams(page):
     page.run()
+    widget(page.radio, "Ranking mode").set_value("Raw PPA").run()
     assert not page.exception
     grades = page.dataframe[2].value.set_index("team")
     assert grades.columns.tolist() == list(weekly.GRADE_COLUMNS)
@@ -131,13 +142,24 @@ def test_grade_table_has_six_numeric_grades_and_bye_teams(page):
     assert grades.loc["Alpha", "season_overall"] == 62.5
     assert grades.loc["Bye team", ["game_offense", "game_defense", "game_overall"]].isna().all()
     original = grades.copy()
-    widget(page.radio, "Ranking mode").set_value("Raw PPA").run()
-    pd.testing.assert_frame_equal(page.dataframe[2].value.set_index("team"), original)
     widget(page.multiselect, "Conferences").set_value(["ACC"]).run()
     pd.testing.assert_frame_equal(page.dataframe[2].value.set_index("team"), original.loc[["Bravo"]])
+    widget(page.multiselect, "Conferences").set_value([]).run()
+    widget(page.radio, "Ranking mode").set_value("BG-adjusted").run()
+    adjusted = page.dataframe[2].value.set_index("team")
+    assert adjusted.columns.tolist() == [*weekly.GRADE_COLUMNS, *weekly.GRADE_CONTEXT_COLUMNS]
+    assert adjusted.loc["Alpha", "season_overall"] == 87.5
+    assert adjusted.loc["Alpha", "game_overall"] == 87.5
+    assert adjusted.peer_group.eq("P4").all()
+    assert adjusted.loc["Alpha", "rating_coverage"] == "Season 1/1 · Week 1/1"
+    assert adjusted.loc["Bye team", "rating_coverage"] == "Season 1/1 · Week 0/0"
+    assert pd.notna(adjusted.loc["Bye team", "season_overall"])
+    widget(page.multiselect, "Conferences").set_value(["ACC"]).run()
+    pd.testing.assert_frame_equal(page.dataframe[2].value.set_index("team"), adjusted.loc[["Bravo"]])
 
 
-def test_grade_table_updates_with_week_phase_and_season(page, monkeypatch):
+@pytest.mark.parametrize("mode", ["Raw PPA", "BG-adjusted"])
+def test_grade_table_updates_with_week_phase_and_season(page, monkeypatch, mode):
     original_load = weekly.load_week
 
     def load_week(season, phase, week):
@@ -147,6 +169,7 @@ def test_grade_table_updates_with_week_phase_and_season(page, monkeypatch):
 
     monkeypatch.setattr(weekly, "load_week", load_week)
     page.run()
+    widget(page.radio, "Ranking mode").set_value(mode).run()
     original = page.dataframe[2].value.set_index("team")
     widget(page.selectbox, "Week").select(1).run()
     earlier = page.dataframe[2].value.set_index("team")
@@ -157,7 +180,10 @@ def test_grade_table_updates_with_week_phase_and_season(page, monkeypatch):
     assert postseason.loc["Bravo", "game_offense"] > earlier.loc["Bravo", "game_offense"]
     widget(page.selectbox, "Season").select(2025).run()
     assert not page.exception
-    assert page.dataframe[2].value.set_index("team").loc["Alpha", "game_offense"] != earlier.loc["Alpha", "game_offense"]
+    if mode == "BG-adjusted":
+        assert page.dataframe[2].value[list(weekly.GRADE_COLUMNS)].isna().all().all()
+    else:
+        assert page.dataframe[2].value.set_index("team").loc["Alpha", "game_offense"] != earlier.loc["Alpha", "game_offense"]
 
 
 def test_bye_team_can_be_selected_without_a_weekly_performance(page):

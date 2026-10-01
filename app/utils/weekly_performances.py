@@ -19,6 +19,11 @@ GRADE_COLUMNS = {
     "season_overall": "Season overall",
     "game_overall": "Game overall",
 }
+GRADE_CONTEXT_COLUMNS = {
+    "peer_group": "Comparison scale",
+    "rating_coverage": "Pregame rating coverage",
+    "grade_status": "Grade availability",
+}
 PRESETS = {
     "Overall": ("ppa", ["successrate", "explosiveness", "plays"]),
     "Passing": ("passingplays_ppa", ["passingplays_successrate", "passingplays_explosiveness"]),
@@ -86,6 +91,13 @@ def load_week(season, season_type, week):
         ORDER BY g.startdate NULLS LAST, g.id, gs.team
     """, params={"season": int(season), "season_type": season_type, "week": int(week)})
     frame = prepare_games(rows)
+    return load_pregame_ratings(frame, season)
+
+
+def load_pregame_ratings(frame, season):
+    """Attach historical opponent context in two batched, read-only queries."""
+    from utils.db import read_df
+
     if frame.empty:
         return frame, None
     note = None
@@ -122,53 +134,175 @@ def numeric(series):
 
 
 def load_grade_baselines(season):
-    """Load both report-card populations once per season, not once per team."""
+    """Load FBS season totals and every completed FBS matchup, including missing stats.
+
+    Schedule rows survive the left join so missing advanced statistics cannot
+    hide a gap in a team's pregame rating coverage.
+    """
     from utils.db import read_df
 
     params = {"season": int(season)}
     season_stats = read_df("""
-        SELECT team, conference, offense_ppa, defense_ppa
-        FROM public.team_advanced_season_stats
-        WHERE season = :season
+        SELECT s.team, s.conference, s.offense_ppa, s.defense_ppa
+        FROM public.team_advanced_season_stats s
+        WHERE s.season = :season AND EXISTS (
+            SELECT 1 FROM public.game_data g
+            WHERE g.season = s.season AND (
+                (g.hometeam = s.team AND LOWER(g.homeclassification) = 'fbs') OR
+                (g.awayteam = s.team AND LOWER(g.awayclassification) = 'fbs')
+            )
+        )
     """, params=params)
     game_stats = read_df("""
-        SELECT gs.offense_ppa, gs.defense_ppa
-        FROM public.team_advanced_game_stats gs
-        JOIN public.game_data gd ON gd.id = gs.game_id
-        WHERE gd.season = :season
-          AND gd.homeclassification = 'fbs'
-          AND gd.awayclassification = 'fbs'
+        SELECT g.id AS game_id, g.season, g.week,
+               LOWER(COALESCE(g.seasontype, 'regular')) AS season_type,
+               participants.team, participants.opponent, participants.conference,
+               'fbs' AS classification, g.startdate, g.starttimetbd,
+               gs.offense_ppa, gs.defense_ppa, gs.offense_plays, gs.defense_plays
+        FROM public.game_data g
+        CROSS JOIN LATERAL (VALUES
+            (g.hometeam, g.awayteam, g.homeconference),
+            (g.awayteam, g.hometeam, g.awayconference)
+        ) AS participants(team, opponent, conference)
+        LEFT JOIN public.team_advanced_game_stats gs
+          ON gs.game_id = g.id AND gs.season = g.season AND gs.team = participants.team
+        WHERE g.season = :season AND g.completed IS TRUE
+          AND LOWER(g.homeclassification) = 'fbs'
+          AND LOWER(g.awayclassification) = 'fbs'
+          AND g.hometeam IS NOT NULL AND g.awayteam IS NOT NULL
+          AND g.hometeam <> g.awayteam
+        ORDER BY g.startdate NULLS LAST, g.id, participants.team
     """, params=params)
+    if not game_stats.empty:
+        if game_stats.duplicated(["season", "game_id", "team"]).any():
+            raise ValueError("Duplicate team-game advanced-stat rows were found.")
+        game_stats["kickoff"] = pd.to_datetime(game_stats["startdate"], utc=True, errors="coerce")
+        game_stats["reliable_kickoff"] = game_stats["kickoff"].notna() & ~game_stats["starttimetbd"].eq(True)
+        game_stats, note = load_pregame_ratings(game_stats, season)
+        game_stats.attrs["rating_note"] = note
     return season_stats, game_stats
 
 
-def build_grade_comparison(frame, season_stats, game_stats):
-    """One row per team with season and selected-week report-card grades.
+def grade_peer_groups(frame):
+    """Use selected-season conferences; G5 denotes all identified non-P4 FBS teams."""
+    conferences = frame["conference"].astype("string").fillna("").str.strip().str.casefold()
+    teams = frame["team"].astype("string").fillna("").str.strip().str.casefold()
+    groups = pd.Series("G5", index=frame.index, dtype="object")
+    groups.loc[conferences.isin(["", "unknown"])] = None
+    power = conferences.isin(["sec", "acc", "big ten", "big 10", "big 12"])
+    groups.loc[power | teams.isin(["notre dame", "notre dame fighting irish"])] = "P4"
+    return groups
 
-    Season values are the latest stored season totals, as on the season report
-    card. Game values use the game report card's full-season team-game baseline.
-    If a team plays twice in a week, average its individual game grades.
-    """
-    season_stats = season_stats.reindex(columns=["team", "conference", "offense_ppa", "defense_ppa"])
-    game_stats = game_stats.reindex(columns=["offense_ppa", "defense_ppa"])
-    season_grades = season_stats[["team", "conference"]].copy()
-    game_grades = frame[["team"]].copy()
+
+def grade_metrics(frame, require_plays=False):
+    """Three independent performance measures, all oriented higher-is-better."""
+    values = {}
     for side in ("offense", "defense"):
-        column = f"{side}_ppa"
-        season_baseline = numeric(season_stats[column])
-        game_baseline = numeric(game_stats[column])
-        season_grades[f"season_{side}"] = season_baseline.map(
-            lambda value: percentile_grade(season_baseline, value, side == "offense"))
-        values = numeric(frame[column]).where(numeric(frame[f"{side}_plays"]) > 0)
-        game_grades[f"game_{side}"] = values.map(
-            lambda value: percentile_grade(game_baseline, value, side == "offense"))
+        values[side] = numeric(frame[f"{side}_ppa"])
+        if require_plays:
+            values[side] = values[side].where(numeric(frame[f"{side}_plays"]) > 0)
+    values["overall"] = values["offense"] - values["defense"]
+    values["defense"] = -values["defense"]
+    return pd.DataFrame(values, index=frame.index)
+
+
+def adjusted_grade_scores(values, baseline, opponent_strength):
+    """Use one season-wide reference distribution, even for selected-week values."""
+    scores = pd.DataFrame(np.nan, index=values.index, columns=values.columns)
+    for metric in values:
+        reference = baseline[metric].dropna()
+        if len(reference) < 2:
+            continue
+        deviation = reference.std(ddof=0)
+        performance = (values[metric] - reference.mean()) / deviation if deviation else values[metric] * 0.0
+        scores[metric] = performance + OPPONENT_WEIGHT * opponent_strength
+    return scores
+
+
+def peer_percentile_grades(scores, baseline, groups, baseline_groups):
+    grades = pd.DataFrame(np.nan, index=scores.index, columns=scores.columns)
+    for group in ("P4", "G5"):
+        selected = groups.eq(group)
+        for metric in scores:
+            reference = baseline.loc[baseline_groups.eq(group), metric].dropna()
+            if len(reference) >= 2:
+                grades.loc[selected, metric] = scores.loc[selected, metric].map(
+                    lambda value: percentile_grade(reference, value))
+    return grades
+
+
+def rating_coverage(frame):
+    """Count schedule appearances independently of PPA/play-count availability."""
+    return frame.assign(opponent_strength_z=numeric(frame["opponent_strength_z"])).groupby("team").agg(
+        total=("opponent_strength_z", "size"), rated=("opponent_strength_z", "count"),
+        strength=("opponent_strength_z", "mean"))
+
+
+def grade_availability(row, scope, rated, total):
+    if not total:
+        return "No completed FBS games" if scope == "season" else "No qualifying game this week"
+    if rated < total:
+        return "Incomplete pregame ratings"
+    if pd.isna(row["peer_group"]):
+        return "Peer group unavailable"
+    if row[[f"{scope}_{metric}" for metric in ("offense", "defense", "overall")]].isna().any():
+        return "Missing PPA or fewer than two valid comparison observations"
+    return ""
+
+
+def build_grade_comparison(frame, season_stats, game_stats, mode="Raw PPA"):
+    """One row per team with independently graded offense, defense and net PPA.
+
+    Season values always use the latest stored totals. Adjusted season bonuses
+    require complete FBS schedule coverage. Only the final adjusted percentiles
+    are split into peer groups; both z-score components use FBS populations.
+    """
+    columns = ["team", "conference", "offense_ppa", "defense_ppa"]
+    game_columns = [*columns, "offense_plays", "defense_plays", "opponent_strength_z"]
+    season_stats = season_stats.reindex(columns=columns).reset_index(drop=True)
+    game_stats = game_stats.reindex(columns=game_columns).reset_index(drop=True)
+    frame = frame.reindex(columns=game_columns).reset_index(drop=True)
+    season_values = grade_metrics(season_stats)
+    game_values = grade_metrics(frame, require_plays=True)
+    game_baseline = grade_metrics(game_stats, require_plays=True)
+    if mode == "BG-adjusted":
+        season_coverage = rating_coverage(game_stats)
+        week_coverage = rating_coverage(frame)
+        complete_strength = season_coverage["strength"].where(season_coverage["rated"].eq(season_coverage["total"]))
+        season_scores = adjusted_grade_scores(season_values, season_values, season_stats["team"].map(complete_strength))
+        baseline_scores = adjusted_grade_scores(game_baseline, game_baseline, numeric(game_stats["opponent_strength_z"]))
+        game_scores = adjusted_grade_scores(game_values, game_baseline, numeric(frame["opponent_strength_z"]))
+        season_groups = grade_peer_groups(season_stats)
+        season_grades = peer_percentile_grades(season_scores, season_scores, season_groups, season_groups)
+        game_grades = peer_percentile_grades(game_scores, baseline_scores, grade_peer_groups(frame), grade_peer_groups(game_stats))
+    else:
+        season_grades = season_values.apply(lambda values: values.map(lambda value: percentile_grade(values, value)))
+        game_grades = pd.DataFrame({metric: game_values[metric].map(
+            lambda value: percentile_grade(game_baseline[metric], value)) for metric in game_values})
+    season_grades = pd.concat([season_stats[["team", "conference"]], season_grades.add_prefix("season_")], axis=1)
+    game_grades = pd.concat([frame[["team"]], game_grades.add_prefix("game_")], axis=1)
     game_grades = game_grades.groupby("team", as_index=False).agg(
-        {f"game_{side}": lambda values: values.mean(skipna=False) for side in ("offense", "defense")})
+        {f"game_{metric}": lambda values: values.mean(skipna=False) for metric in game_values})
     result = season_grades.merge(game_grades, on="team", how="outer", validate="one_to_one")
     conferences = frame.drop_duplicates("team").set_index("team")["conference"]
     result["conference"] = result["team"].map(conferences).fillna(result["conference"]).fillna("Unknown")
-    for scope in ("season", "game"):
-        result[f"{scope}_overall"] = (result[f"{scope}_offense"] + result[f"{scope}_defense"]) / 2
+    if mode == "BG-adjusted":
+        result["peer_group"] = grade_peer_groups(result)
+        coverage_labels, statuses = [], []
+        for _, row in result.iterrows():
+            labels, notes = [], []
+            for scope, coverage in (("season", season_coverage), ("game", week_coverage)):
+                counts = coverage.reindex([row["team"]]).fillna(0).iloc[0]
+                rated, total = int(counts["rated"]), int(counts["total"])
+                label = "Season" if scope == "season" else "Week"
+                labels.append(f"{label} {rated}/{total}")
+                note = grade_availability(row, scope, rated, total)
+                if note:
+                    notes.append(f"{label}: {note}")
+            coverage_labels.append(" · ".join(labels))
+            statuses.append(" · ".join(notes) or "Available")
+        result["rating_coverage"] = coverage_labels
+        result["grade_status"] = statuses
     return result.sort_values(["game_overall", "season_overall", "team"],
                               ascending=[False, False, True], na_position="last").reset_index(drop=True)
 
