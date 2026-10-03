@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {margin:0;font:14px system-ui,sans-serif;color:#172b45} button {padding:10px 16px;background:white;color:#172b45;border:1px solid #bdcbd9;border-radius:8px;cursor:pointer;font-weight:600}
+button:focus-visible {outline:3px solid #398ddd} img {display:block;width:100%;max-width:720px;height:auto;margin:12px 0 24px} .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap} p{line-height:1.5}
+</style></head><body>
+<p id="status" role="status">Preparing full-resolution graphics…</p>
+<p>2160 × 2700 PNG (4:5). Copy and paste into your post, or right-click an image and choose Copy Image.</p>
+<main id="slides"></main>
+<script>
+(async () => {
+  const config = __H2H_CONFIG__;
+  const width=2160, height=2700, navy="#0c2c50", gold="#e4bd72", muted="#52677e";
+  const logos=new Map(), status=document.getElementById("status");
+  const teams = config.slides.flatMap(s => [...(s.rows||[]), ...(s.teams||[]), ...(s.games||[]).flatMap(g=>[g.winner,g.loser])]);
+  let missing=0;
+  await Promise.all([...new Map(teams.map(t=>[t.name,t])).values()].map(async team=>{
+    if(!team.logo){missing++;return;}
+    const logo=await new Promise(resolve=>{
+      const img=new Image(); const timeout=setTimeout(()=>resolve(null),8000);
+      img.onload=()=>{clearTimeout(timeout);resolve(img)}; img.onerror=()=>{clearTimeout(timeout);resolve(null)};
+      if(!team.logo.startsWith("data:"))img.crossOrigin="anonymous";
+      img.src=team.logo;
+    });
+    if(logo)logos.set(team.name,logo);else missing++;
+  }));
+  function text(ctx,value,x,y,max,size=48,color=navy,align="left") {
+    ctx.fillStyle=color;ctx.textBaseline="top";ctx.textAlign=align;
+    do {ctx.font=`700 ${size}px Arial,sans-serif`;if(ctx.measureText(String(value)).width<=max)break;size--;}while(size>20);
+    ctx.fillText(String(value),x,y,max);
+  }
+  function logo(ctx,team,x,y,size=100){
+    const img=logos.get(team.name);
+    if(img){const scale=Math.min(size/img.width,size/img.height);ctx.drawImage(img,x+(size-img.width*scale)/2,y+(size-img.height*scale)/2,img.width*scale,img.height*scale);}
+    else{ctx.fillStyle="#dde6f0";ctx.beginPath();ctx.arc(x+size/2,y+size/2,size/2,0,Math.PI*2);ctx.fill();text(ctx,team.name.split(/\s+/).map(w=>w[0]).slice(0,3).join(""),x+size/2,y+size*.3,size*.8,size*.32,navy,"center");}
+  }
+  function arrow(ctx,x1,y1,x2,y2,color=gold){
+    const angle=Math.atan2(y2-y1,x2-x1);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=9;
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.beginPath();ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-30*Math.cos(angle-.5),y2-30*Math.sin(angle-.5));ctx.lineTo(x2-30*Math.cos(angle+.5),y2-30*Math.sin(angle+.5));ctx.closePath();ctx.fill();
+  }
+  function header(ctx,slide,index){
+    ctx.fillStyle="#edf1f5";ctx.fillRect(0,0,width,height);ctx.fillStyle=navy;ctx.fillRect(0,0,width,340);ctx.fillStyle=gold;ctx.fillRect(0,332,width,8);
+    text(ctx,"@BG.ANALYTICS · COLLEGE FOOTBALL",80,60,2000,48,gold);
+    text(ctx,slide.title,80,145,2000,108,"white");
+    text(ctx,`${config.season} · THROUGH ${config.cutoff.toUpperCase()}`,80,390,2000,55);
+    text(ctx,slide.subtitle,80,477,2000,48);
+    const provisional=config.status.startsWith("Provisional");
+    text(ctx,`${provisional?"PROVISIONAL · BEST FOUND":config.status.toUpperCase()} · FBS VS. FBS ONLY`,80,557,2000,37,provisional?"#a3293b":muted);
+    if(slide.detail)text(ctx,slide.detail,80,630,2000,42,muted);
+    ctx.fillStyle=navy;ctx.fillRect(0,2485,width,215);
+    const note=config.kind==="rankings"?"Direct results first. Then shortest 2-game chains, 3-game chains, and onward.":config.kind==="chains"?"Every arrow is a completed win. Chains need not follow game-date order.":"Every arrow is a completed win. Circular results cannot all fit one ranking.";
+    text(ctx,note,80,2530,2000,36,"white");
+    text(ctx,`Results only · Scores shown as context · ${index+1}/${config.slides.length}`,80,2600,2000,34,gold);
+  }
+  function rankings(ctx,slide){
+    slide.rows.forEach((team,i)=>{
+      const col=i<13?0:1, row=col===0?i:i-13, x=80+col*1030,y=700+row*130;
+      ctx.fillStyle="white";ctx.fillRect(x,y,970,116);
+      text(ctx,team.position,x+22,y+30,85,56);logo(ctx,team,x+118,y+14,84);
+      text(ctx,team.name,x+225,y+18,715,46);
+      text(ctx,`${team.record} FBS · ${team.exceptions} exceptions`,x+225,y+73,710,29,muted);
+    });
+    if(slide.rows.length===0)text(ctx,"No ranked teams",80,800,2000,64);
+  }
+  function chains(ctx,slide){
+    if(!slide.games.length){text(ctx,"NO WIN PATH",1080,1190,1900,110,navy,"center");text(ctx,"No result chain connects these teams in this direction.",1080,1370,1900,47,muted,"center");return;}
+    slide.games.forEach((game,i)=>{
+      const y=760+i*330;ctx.fillStyle="white";ctx.fillRect(80,y,2000,292);
+      logo(ctx,game.winner,180,y+35,110);logo(ctx,game.loser,1840,y+35,110);
+      text(ctx,game.winner.name,350,y+55,610,55);text(ctx,game.loser.name,1790,y+55,610,55,navy,"right");
+      arrow(ctx,1000,y+82,1160,y+82,navy);
+      text(ctx,`${game.score} · ${game.date}`,1080,y+190,1830,47,muted,"center");
+    });
+  }
+  function circle(ctx,slide){
+    const n=slide.teams.length, cx=1080,cy=1470,radius=710;
+    const points=slide.teams.map((_,i)=>[cx+radius*Math.cos(-Math.PI/2+i*2*Math.PI/n),cy+radius*Math.sin(-Math.PI/2+i*2*Math.PI/n)]);
+    points.forEach(([x,y],i)=>{
+      const [nx,ny]=points[(i+1)%n],dx=nx-x,dy=ny-y,len=Math.hypot(dx,dy);
+      const ox=n===2?-dy/len*100:0,oy=n===2?dx/len*100:0;
+      // Stop outside the rectangular team cards, including diagonal edges.
+      const clearance=Math.min(290/Math.max(.0001,Math.abs(dx/len)),118/Math.max(.0001,Math.abs(dy/len)))+28;
+      arrow(ctx,x+dx/len*clearance+ox,y+dy/len*clearance+oy,nx-dx/len*clearance+ox,ny-dy/len*clearance+oy,navy);
+      // Move score/date labels inside the circle so they never cover arrowheads.
+      const middleX=(x+nx)/2,middleY=(y+ny)/2,inward=Math.hypot(cx-middleX,cy-middleY);
+      const mx=middleX+(n===2?ox*2:(cx-middleX)/inward*145),my=middleY+(n===2?oy*2:(cy-middleY)/inward*145);
+      ctx.fillStyle="#edf1f5";ctx.fillRect(mx-140,my-47,280,95);
+      text(ctx,slide.games[i].score,mx,my-42,260,43,navy,"center");
+      text(ctx,slide.games[i].date,mx,my+8,260,27,muted,"center");
+    });
+    points.forEach(([x,y],i)=>{
+      const team=slide.teams[i];ctx.fillStyle="white";ctx.fillRect(x-290,y-110,580,228);
+      logo(ctx,team,x-58,y-100,116);text(ctx,team.name,x,y+42,545,49,navy,"center");
+    });
+  }
+  try{
+    for(const [index,slide] of config.slides.entries()){
+      const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;const ctx=canvas.getContext("2d");
+      header(ctx,slide,index);if(config.kind==="rankings")rankings(ctx,slide);else if(config.kind==="chains")chains(ctx,slide);else circle(ctx,slide);
+      const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/png"));if(!blob)throw new Error("PNG could not be created");
+      const wrapper=document.createElement("section"), actions=document.createElement("div"),button=document.createElement("button"),feedback=document.createElement("span"),img=document.createElement("img");
+      actions.className="actions";button.textContent=`Copy graphic ${index+1}`;feedback.setAttribute("role","status");
+      button.addEventListener("click",async()=>{try{await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);feedback.textContent="Copied.";}catch(_){feedback.textContent="Right-click the image and choose Copy Image.";}});
+      img.src=URL.createObjectURL(blob);img.alt=`${slide.title}: ${slide.subtitle}. ${config.season}, ${config.cutoff}. ${config.status}. Graphic ${index+1} of ${config.slides.length}.`;
+      actions.append(button,feedback);wrapper.append(actions,img);document.getElementById("slides").append(wrapper);
+    }
+    status.textContent=`${config.slides.length} graphic(s) ready.${missing?" Missing logos use initials; full team names remain visible.":""}`;
+  }catch(error){status.textContent=`Could not create graphics: ${error.message}. Try generating them again.`;}
+})();
+</script></body></html>

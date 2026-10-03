@@ -1,6 +1,51 @@
 # BG.Analytics.CFB.Dash
 BG.Analytics CFB Dashboard
 
+**League Wide → Head to Head Analysis** builds results-only national rankings,
+explores shortest win chains in both directions, and shows selected two-to-six-team
+Circles of Chaos. Select a season and cumulative **Through week**, then explicitly
+**Calculate rankings**. Only completed FBS-vs-FBS games with valid unequal scores
+are evidence; teams without an eligible result remain unranked. Conference/team
+filters only filter the table. Historical checkpoints use currently stored corrected
+results, not historical database snapshots. Invalid completed records and conflicting
+duplicate IDs are excluded and counted; identical duplicate games count once.
+
+The optimizer first minimizes direct-result exceptions (a winner below its loser),
+then reversed pairs at shortest distance two, three, and onward. Repeated meetings
+count separately at distance one; each indirect ordered pair counts only once at
+its shortest distance. Later priorities cannot worsen earlier proven optima. Scores,
+polls, rating models, and victory margins do not break ties. Acyclic graphs use a
+topological ordering; circular graphs use OR-Tools CP-SAT. Install the updated
+`requirements.txt` to enable circular-result optimization.
+
+Ranking calculations have a shared 30-second budget and are cached by normalized
+results, cutoff, and algorithm version. **Provisional** means best found, not proven
+optimal. Expand calculation details to inspect objective values, proof statuses, and
+the first unproven objective's lower bound. Every direct-result exception is listed.
+Positions represent one ordering; they need not be unique. Corrected scores clear
+cached identities and stale previews after the normal five-minute source refresh.
+
+After all priorities are proven, **Calculate optimal rank ranges** supports up to
+five selected teams with a separate shared 30-second budget. Exact endpoints are
+the best and worst positions among optimal orders. Incomplete endpoints are
+conservative outer bounds, not proven attainable positions; intermediate positions
+and different teams' endpoints need not be jointly attainable.
+
+The chain explorer uses one deterministic shortest path per direction, with the
+earliest available meeting witnessing each repeated edge. Paths need not follow
+game-date order. Circle examples are the shortest cycle found for each team,
+deduplicated by rotation and capped at 50 after filtering; longer cycles may exist.
+Two-team circles represent split rematches. **Show Top 25 graphic**, **Show matchup
+chain graphics**, and **Show Circle of Chaos graphic** produce copyable 2160 × 2700
+PNGs with scope/cutoff labels. Long chains paginate without losing games. The Top 25
+graphic uses national ranks regardless of table filters; provisional rankings carry
+a provisional label. Missing logos fall back to initials and readable team names.
+
+Focused checks: `python -m pytest tests/test_head_to_head*.py -q` and
+`node --test tests/test_head_to_head_graphics.cjs`. Optimizer tests compare small
+graphs and rank ranges against all permutations and require OR-Tools. Page tests
+use synthetic results without database access. No database writes or jobs are added.
+
 The **Conquest Map** has a **Show slide images** button below the map. After
 positioning the logos, use it to display three matching 2160 × 2700 portrait PNG
 slides (4:5) for Instagram, with the season and week in a large header on every
