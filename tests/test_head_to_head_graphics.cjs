@@ -55,13 +55,13 @@ test('chain pages render all games and explicit no-path panel',async()=>{
   assert.ok(drawn.some(args=>args[0]==='NO WIN PATH'));
 });
 
-for(const count of [2,3,6])test(`${count}-team circle renders scores and names`,async()=>{
+for(const count of [2,3,6,16])test(`${count}-team circle renders names and appropriate evidence`,async()=>{
   const teams=Array.from({length:count},(_,i)=>team(`A School With A Very Long Name ${i}`));
   teams[0].logo='https://unavailable.example/logo.png';
   const games=teams.map((winner,i)=>({winner,loser:teams[(i+1)%count],score:`${30+i}–17`,date:'2026-09-05'}));
   const {drawn,elements}=await render({kind:'circle',season:2026,cutoff:'Week 5',status:'Completed results',
     slides:[{title:'CIRCLE OF CHAOS',subtitle:`${count} teams`,teams,games}]});
-  for(const t of teams)assert.ok(drawn.some(args=>args[0]===t.name));
-  for(const game of games)assert.ok(drawn.some(args=>args[0]===game.score));
+  for(const t of teams)assert.ok(drawn.some(args=>args[0].includes(t.name)));
+  if(count<=6)for(const game of games)assert.ok(drawn.some(args=>args[0]===game.score));
   assert.match(elements.status.textContent,/ready/);
 });

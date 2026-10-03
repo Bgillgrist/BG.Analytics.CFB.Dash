@@ -41,3 +41,16 @@ def test_circles_preserve_closing_game_and_escape_html(monkeypatch):
     assert "A</script>" not in g.render_graphic(config)
     assert "A&lt;/script&gt;" in g.circle_svg(data,("A</script>","B","C"))
     assert "A&lt;/script&gt;" in g.chain_markup(data,("A</script>","B"))
+
+
+def test_16_team_circle_overview_and_evidence_preserve_closing_link():
+    cycle = tuple(f"Team {i:02}" for i in range(16))
+    data = dataset(list(zip(cycle,(*cycle[1:],cycle[0]))))
+    config = g.graphic_config(data,"circle",cycle=cycle)
+    assert len(config["slides"]) == 5
+    details = [game for slide in config["slides"][1:] for game in slide["games"]]
+    assert len(details) == 16
+    assert details[-1]["winner"]["name"] == cycle[-1]
+    assert details[-1]["loser"]["name"] == cycle[0]
+    markup = g.circle_svg(data,cycle)
+    assert all(name in markup for name in cycle)

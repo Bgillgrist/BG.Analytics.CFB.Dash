@@ -48,6 +48,7 @@ button:focus-visible {outline:3px solid #398ddd} img {display:block;width:100%;m
     const provisional=config.status.startsWith("Provisional");
     text(ctx,`${provisional?"PROVISIONAL · BEST FOUND":config.status.toUpperCase()} · FBS VS. FBS ONLY`,80,557,2000,37,provisional?"#a3293b":muted);
     if(slide.detail)text(ctx,slide.detail,80,630,2000,42,muted);
+    if(config.tiebreak)text(ctx,`Tiebreak: ${config.tiebreak}`,80,630,2000,38,muted);
     ctx.fillStyle=navy;ctx.fillRect(0,2485,width,215);
     const note=config.kind==="rankings"?"Direct results first. Then shortest 2-game chains, 3-game chains, and onward.":config.kind==="chains"?"Every arrow is a completed win. Chains need not follow game-date order.":"Every arrow is a completed win. Circular results cannot all fit one ranking.";
     text(ctx,note,80,2530,2000,36,"white");
@@ -74,6 +75,7 @@ button:focus-visible {outline:3px solid #398ddd} img {display:block;width:100%;m
     });
   }
   function circle(ctx,slide){
+    if(slide.teams.length>6){largeCircle(ctx,slide);return;}
     const n=slide.teams.length, cx=1080,cy=1470,radius=710;
     const points=slide.teams.map((_,i)=>[cx+radius*Math.cos(-Math.PI/2+i*2*Math.PI/n),cy+radius*Math.sin(-Math.PI/2+i*2*Math.PI/n)]);
     points.forEach(([x,y],i)=>{
@@ -94,10 +96,28 @@ button:focus-visible {outline:3px solid #398ddd} img {display:block;width:100%;m
       logo(ctx,team,x-58,y-100,116);text(ctx,team.name,x,y+42,545,49,navy,"center");
     });
   }
+  function largeCircle(ctx,slide){
+    const n=slide.teams.length,cx=1080,cy=1220,radius=480;
+    const points=slide.teams.map((_,i)=>[cx+radius*Math.cos(-Math.PI/2+i*2*Math.PI/n),cy+radius*Math.sin(-Math.PI/2+i*2*Math.PI/n)]);
+    points.forEach(([x,y],i)=>{
+      const [nx,ny]=points[(i+1)%n],dx=nx-x,dy=ny-y,len=Math.hypot(dx,dy);
+      arrow(ctx,x+dx/len*72,y+dy/len*72,nx-dx/len*72,ny-dy/len*72,navy);
+    });
+    points.forEach(([x,y],i)=>{
+      ctx.fillStyle="white";ctx.fillRect(x-62,y-60,124,126);
+      logo(ctx,slide.teams[i],x-39,y-53,78);text(ctx,i+1,x,y+30,110,31,navy,"center");
+    });
+    text(ctx,`${n}-TEAM CIRCLE`,cx,1190,680,60,navy,"center");
+    const perColumn=Math.ceil(n/2);
+    slide.teams.forEach((team,i)=>{
+      const col=i<perColumn?0:1,row=i%perColumn,x=80+col*1030,y=1800+row*77;
+      text(ctx,`${i+1}. ${team.name}`,x,y,980,40);
+    });
+  }
   try{
     for(const [index,slide] of config.slides.entries()){
       const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;const ctx=canvas.getContext("2d");
-      header(ctx,slide,index);if(config.kind==="rankings")rankings(ctx,slide);else if(config.kind==="chains")chains(ctx,slide);else circle(ctx,slide);
+      header(ctx,slide,index);if(config.kind==="rankings")rankings(ctx,slide);else if(config.kind==="chains"||slide.layout==="games")chains(ctx,slide);else circle(ctx,slide);
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/png"));if(!blob)throw new Error("PNG could not be created");
       const wrapper=document.createElement("section"), actions=document.createElement("div"),button=document.createElement("button"),feedback=document.createElement("span"),img=document.createElement("img");
       actions.className="actions";button.textContent=`Copy graphic ${index+1}`;feedback.setAttribute("role","status");

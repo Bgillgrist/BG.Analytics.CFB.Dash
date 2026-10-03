@@ -116,8 +116,13 @@ def test_provisional_ranking_blocks_optimal_ranges_and_labels_graphic(page,monke
 def test_circle_explorer_and_graphics_do_not_require_solver(page,monkeypatch):
     monkeypatch.setattr(h,"load_season",lambda season:(pd.DataFrame([row(),row(id=2,hometeam="B",awayteam="A")]),pd.DataFrame()))
     page.run()
+    assert not any(s.label == "Circle" for s in page.selectbox)
+    widget(page.button,"Search longest circles").click().run()
     assert not page.exception
     assert widget(page.selectbox,"Circle").value == ("A","B")
     assert any("Contradictory paths" in item.value for item in page.warning)
     widget(page.button,"Show Circle of Chaos graphic").click().run()
     assert "h2h_graphic_circle" in page.session_state
+    widget(page.selectbox,"Maximum teams in circle").set_value(8).run()
+    assert "h2h_cycles" not in page.session_state
+    assert "h2h_graphic_circle" not in page.session_state

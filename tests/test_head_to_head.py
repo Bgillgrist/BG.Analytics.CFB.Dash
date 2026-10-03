@@ -77,6 +77,28 @@ def test_dag_ranking_ranges_and_unranked():
     assert pd.isna(frame.set_index("team").loc["Bye","position"])
     assert frame.set_index("team").loc["Bye","rank_range"] == "Unranked"
     assert h.solve_ranking(dataset([])).order == ()
+    assert result.order_unique is False
+    assert result.tiebreak_positions == len(result.order)
+    assert h.solve_ranking(dataset([("A","B"),("B","C")])).order_unique is True
+
+
+def test_resume_tiebreak_prefers_record_over_alphabet_and_preserves_results():
+    data = dataset([("Zulu","Loser 1"),("Zulu","Loser 2"),("Alpha","Beta"),("Beta","Gamma")])
+    result = h.solve_ranking(data)
+    assert result.order[:2] == ("Zulu","Alpha")  # both undefeated; two wins beat one
+    assert result.order.index("Alpha") < result.order.index("Beta") < result.order.index("Gamma")
+    assert not h.exception_games(data,result)
+    preference = {name:i for i,name in enumerate(h.resume_order(data.games))}
+    _, orders = brute(data)
+    assert result.order == min(orders,key=lambda o:tuple(preference[n] for n in o))
+
+
+def test_opponent_strength_excludes_self_games_and_breaks_equal_records():
+    data = dataset([("Zulu","Strong"),("Strong","X"),("Strong","Y"),("Alpha","Weak"),("X","Weak")])
+    stats = h.resume_stats(data.games)
+    assert stats["Zulu"][:2] == stats["Alpha"][:2]
+    assert stats["Zulu"][2] == 1 and stats["Alpha"][2] == 0
+    assert h.solve_ranking(data).order[0] == "Zulu"
 
 
 def test_shortest_distances_count_pairs_once_and_keep_rematches():
@@ -115,6 +137,9 @@ def test_solver_and_ranges_match_all_permutations(pairs):
     assert result.optimal
     assert tuple(v for _,v,_ in result.objectives) == best
     assert result.order in orders
+    priority = {n:i for i,n in enumerate(h.resume_order(data.games))}
+    assert result.order == min(orders,key=lambda o:tuple(priority[n] for n in o))
+    assert result.tiebreak_positions == len(result.order)
     for r in h.calculate_ranges(data,result,list(result.order)[:5],seconds=10):
         actual = [o.index(r.team)+1 for o in orders]
         assert r.low_exact and r.high_exact
@@ -157,3 +182,45 @@ def test_partial_range_outer_bounds_and_individual_endpoint_flags(monkeypatch):
     monkeypatch.setattr(h,"new_solver",lambda seconds: LimitedSolver())
     ranges = h.calculate_ranges(data,ranking,["A"])
     assert ranges == (h.RankRange("A",1,4,False,False),)
+
+
+def test_longest_circle_finds_16_distinct_teams_even_with_shortcut():
+    pairs = [(f"T{i:02}",f"T{(i+1)%16:02}") for i in range(16)] + [("T01","T00")]
+    data = dataset(pairs)
+    result = h.longest_cycles(data.games,seconds=2)
+    assert len(result.cycles[0]) == 16 and len(set(result.cycles[0])) == 16
+    assert result.longest_proven
+    assert [len(c) for c in result.cycles] == [16,2]
+    for cycle in result.cycles:
+        assert len(h.path_games(data.games,(*cycle,cycle[0]))) == len(cycle)
+    filtered = h.longest_cycles(data.games,team="T10",seconds=2)
+    assert all("T10" in c for c in filtered.cycles)
+    assert len(filtered.cycles) == 1
+
+
+def test_long_cycle_size_limit_dedup_and_time_limit_labels():
+    data = dataset([("A","B"),("B","C"),("C","A"),("B","A")])
+    result = h.longest_cycles(data.games,max_teams=2)
+    assert result.cycles == (("A","B"),) and result.longest_proven
+    dense = dataset([(str(i),str(j)) for i in range(8) for j in range(8) if i != j])
+    stopped = h.longest_cycles(dense.games,max_teams=8,seconds=0)
+    assert stopped.cycles and not stopped.exhaustive and not stopped.longest_proven
+    assert stopped.reason == "Time limit"
+    capped = h.longest_cycles(dense.games,max_teams=8,limit=3,seconds=2)
+    assert len(capped.cycles) == 3 and all(len(c)==8 for c in capped.cycles)
+    assert capped.longest_proven and not capped.exhaustive and capped.reason == "Result limit"
+    empty = h.longest_cycles(dataset([("A","B")]).games)
+    assert empty.exhaustive and not empty.cycles
+
+
+def test_long_cycle_search_matches_exhaustive_small_graph_oracle():
+    data = dataset([("A","B"),("B","C"),("C","A"),("A","D"),("D","B"),("C","D"),("B","A")])
+    edges = h.graph(data.games)
+    expected = set()
+    for size in range(2,5):
+        for cycle in permutations(edges,size):
+            if cycle[0] == min(cycle) and all(b in edges[a] for a,b in zip(cycle,(*cycle[1:],cycle[0]))):
+                expected.add(cycle)
+    result = h.longest_cycles(data.games,max_teams=4,seconds=3)
+    assert result.exhaustive and set(result.cycles) == expected
+    assert list(result.cycles) == sorted(expected,key=lambda c:(-len(c),c))

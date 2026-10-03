@@ -23,6 +23,11 @@ def cached_ranges(dataset, ranking, teams, version):
     return h2h.calculate_ranges(dataset, ranking, teams)
 
 
+@st.cache_data(max_entries=24)
+def cached_cycles(dataset, team, max_teams, seconds, version):
+    return h2h.longest_cycles(dataset.games, team, max_teams=max_teams, seconds=seconds)
+
+
 def show_graphic(kind, identity, config_factory, label):
     key = f"h2h_graphic_{kind}"
     if st.session_state.get(key, (None,))[0] != identity:
@@ -52,6 +57,9 @@ with st.expander("How the rankings work"):
     st.markdown("Direct wins come first: minimize games whose winner ranks below the loser. Among equally good orders, "
                 "minimize reversed two-game chains, then three-game chains, and so on. Each pair contributes once at its "
                 "shortest distance; repeated games count individually as direct results. Scores, polls, and power ratings do not influence ranks.")
+    st.markdown("Among equally good result orders, fill each position with the best available résumé: **FBS winning percentage → FBS wins → "
+                "opponents' FBS winning percentage**. Opponent records exclude games against the team being ranked; repeated opponents count once per meeting. "
+                "Alphabetical order is only the final fallback when these values also tie. No opponent games means a schedule tiebreak value of zero.")
     st.caption("A → B means A beat B. Circular results make a perfect ordering impossible. The list is one representative "
                "order; positions may not be unique. Calculations run only when requested, for up to 30 seconds each. "
                "Historical weeks use today's stored corrected results, not historical database snapshots.")
@@ -80,7 +88,7 @@ if not checkpoints:
     if unplayed.teams:
         st.dataframe(pd.DataFrame({"Team": [t.name for t in unplayed.teams], "Status": "Unranked"}), hide_index=True)
     for key in list(st.session_state):
-        if key.startswith(("h2h_result", "h2h_ranges", "h2h_graphic_")):
+        if key.startswith(("h2h_result", "h2h_ranges", "h2h_graphic_", "h2h_cycles")):
             del st.session_state[key]
     st.stop()
 cutoff = second.selectbox("Through week", checkpoints, index=len(checkpoints) - 1, format_func=h2h.checkpoint_label,
@@ -89,7 +97,7 @@ dataset = h2h.prepare_dataset(rows, assets, season, cutoff)
 identity = dataset.fingerprint
 if st.session_state.get("h2h_dataset") != identity:
     for key in list(st.session_state):
-        if key.startswith(("h2h_result", "h2h_ranges", "h2h_graphic_")):
+        if key.startswith(("h2h_result", "h2h_ranges", "h2h_graphic_", "h2h_cycles")):
             del st.session_state[key]
     st.session_state.h2h_dataset = identity
 if dataset.excluded:
@@ -116,8 +124,18 @@ with tabs[0]:
         a.metric("Games included", len(dataset.games))
         b.metric("Results honored", f"{(len(dataset.games) - len(exceptions)) / len(dataset.games):.1%}")
         c.metric("Exceptions", len(exceptions))
-        d.metric("Solve status", "Optimal" if ranking.optimal else "Provisional")
-        st.caption("Positions show one representative order, not necessarily unique ranks. Each game's exception counts toward both participating teams.")
+        d.metric("Results fit", ("All results fit" if not exceptions else "Best fit proven") if ranking.optimal else "Provisional")
+        st.info("A best fit is not necessarily a unique ranking. Zero exceptions means every included winner is above its loser; many different orders may do that. "
+                "The résumé tiebreaker selects among those orders. A team with losses can still rank highly; only FBS games through the selected cutoff count.")
+        if ranking.order_unique is False:
+            st.caption("Confirmed: multiple equally valid head-to-head orders exist for these results.")
+        elif ranking.order_unique is True:
+            st.caption("These head-to-head results determine a unique ordering of the ranked teams.")
+        if ranking.optimal and ranking.tiebreak_positions < len(ranking.order):
+            st.warning(f"Result priorities are proven, but the time budget ended before all résumé tiebreaks were resolved. "
+                       f"Tiebreaks finalized for the first {ranking.tiebreak_positions} positions.")
+        else:
+            st.caption("Tiebreak: FBS win percentage, then FBS wins, then opponents' FBS win percentage. Direct results and chain priorities always come first.")
         if not ranking.optimal:
             st.warning("Best order found within the budget; optimality is not yet proven for all priorities.")
         with st.expander("Calculation details and proof status"):
@@ -139,7 +157,7 @@ with tabs[0]:
                         st.session_state.h2h_ranges = ranges
                     except Exception:
                         st.error("Rank ranges could not be calculated. Try again.")
-                st.caption("Exact ranges give the best and worst position across all optimal orders. Incomplete ranges are conservative outer bounds. "
+                st.caption("Ranges show the flexibility in head-to-head evidence BEFORE the résumé tiebreaker. Exact ranges give the best and worst position across all optimal result orders. Incomplete ranges are conservative outer bounds. "
                            "Intermediate positions and different teams' endpoints are not necessarily jointly attainable.")
                 calculated = st.session_state.get("h2h_ranges", ())
                 if calculated:
@@ -161,6 +179,8 @@ with tabs[0]:
         st.dataframe(visible, hide_index=True, use_container_width=True, column_config={
             "position": st.column_config.NumberColumn("Position", format="%d"), "team": "Team",
             "logo": st.column_config.ImageColumn("Logo"), "conference": "Conference", "record": "FBS record",
+            "win_pct": st.column_config.NumberColumn("FBS win pct", format="%.3f"),
+            "opponent_win_pct": st.column_config.NumberColumn("Opponent win pct", format="%.3f", help="Pooled FBS opponent records, excluding games against this team; repeated opponents count per meeting."),
             "exceptions": "Exceptions", "rank_range": "Optimal rank range"})
         with st.expander(f"Direct-result exceptions ({len(exceptions)})"):
             if exceptions:
@@ -205,16 +225,36 @@ with tabs[1]:
         st.info("At least two teams are needed to explore paths.")
 
 with tabs[2]:
-    st.caption("A selection of short cycles: the shortest circle found for each team, deduplicated and limited to two through six teams. "
-               "This is not an exhaustive list; longer circles may also exist. Two-team circles are split rematches.")
+    st.caption("Search for the longest circles first, with up to 16 distinct teams. Every team appears once before the loop closes. "
+               "Two-team circles are split rematches. Search runs only when requested and returns up to 50 examples.")
     circle_team = st.selectbox("Circle includes", ["All teams", *names], key=f"h2h_circle_team_{season}")
-    cycles, truncated = h2h.short_cycles(dataset.games, None if circle_team == "All teams" else circle_team)
-    if truncated:
-        st.caption("Showing the first 50 matching examples. Filter to a team for a narrower selection.")
+    a, b = st.columns(2)
+    max_teams = a.selectbox("Maximum teams in circle", list(range(2, 17)), index=14)
+    seconds = b.selectbox("Search budget (seconds)", [15, 30, 60, 120], index=2)
+    search_identity = (identity, circle_team, max_teams, seconds)
+    if st.session_state.get("h2h_cycles_identity") != search_identity:
+        st.session_state.pop("h2h_cycles", None)
+        st.session_state.pop("h2h_graphic_circle", None)
+        st.session_state.h2h_cycles_identity = search_identity
+    if st.button("Search longest circles", disabled=not dataset.games):
+        with st.spinner(f"Searching longest-first · up to {seconds} seconds…"):
+            st.session_state.h2h_cycles = cached_cycles(dataset, None if circle_team == "All teams" else circle_team,
+                                                       max_teams, seconds, h2h.API_VERSION)
+    search = st.session_state.get("h2h_cycles")
+    cycles = search.cycles if search else ()
+    if search and cycles:
+        st.caption(f"{len(cycles)} examples · Longest {'proven within selected limit' if search.longest_proven else 'found, not proven longest'}: "
+                   f"{len(cycles[0])} teams · {search.reason}")
+        if not search.exhaustive:
+            st.info("This is a bounded selection, not every possible circle. Increase the time budget or filter to a team to explore further.")
     if cycles:
-        cycle = st.selectbox("Circle", cycles, format_func=lambda c: " → ".join((*c, c[0])), key=f"h2h_circle_{identity}_{circle_team}")
+        cycle = st.selectbox("Circle", cycles, format_func=lambda c: f"{len(c)} teams · " + " → ".join((*c, c[0])), key=f"h2h_circle_{search_identity}")
         st.markdown(graphics.circle_svg(dataset, cycle), unsafe_allow_html=True)
+        if len(cycle) > 6:
+            st.caption(" · ".join(f"{i}. {name}" for i, name in enumerate(cycle, 1)))
         st.dataframe(h2h.game_rows(h2h.path_games(dataset.games, (*cycle, cycle[0]))), hide_index=True, use_container_width=True)
         show_graphic("circle", (identity, cycle), lambda: graphics.graphic_config(dataset, "circle", cycle=cycle), "Show Circle of Chaos graphic")
     else:
-        st.info("No matching two-to-six-team circles found by this cutoff.")
+        st.info(("No matching circles found in this search. A time-limited search does not establish that none exist."
+                 if not search.exhaustive else "No matching circles within the selected size limit exist by this cutoff.")
+                if search else "Choose a team/size limit and search to find the longest circles first.")

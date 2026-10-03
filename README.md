@@ -2,7 +2,7 @@
 BG.Analytics CFB Dashboard
 
 **League Wide → Head to Head Analysis** builds results-only national rankings,
-explores shortest win chains in both directions, and shows selected two-to-six-team
+explores shortest win chains in both directions, and searches two-to-sixteen-team
 Circles of Chaos. Select a season and cumulative **Through week**, then explicitly
 **Calculate rankings**. Only completed FBS-vs-FBS games with valid unequal scores
 are evidence; teams without an eligible result remain unranked. Conference/team
@@ -14,32 +14,48 @@ The optimizer first minimizes direct-result exceptions (a winner below its loser
 then reversed pairs at shortest distance two, three, and onward. Repeated meetings
 count separately at distance one; each indirect ordered pair counts only once at
 its shortest distance. Later priorities cannot worsen earlier proven optima. Scores,
-polls, rating models, and victory margins do not break ties. Acyclic graphs use a
-topological ordering; circular graphs use OR-Tools CP-SAT. Install the updated
+polls, rating models, and victory margins do not break ties. After fixing the result
+priorities, fill positions in order using FBS winning percentage, then FBS wins,
+then opponents' FBS winning percentage. Opponent records exclude games against the
+evaluated team, pool remaining wins/losses, and count repeated opponents per matchup;
+no remaining games gives a zero schedule tiebreak value. Alphabetical order is the
+last fallback for equal résumés. Acyclic graphs pick the best available résumé at
+each topological step; circular graphs use OR-Tools CP-SAT with the same positional
+preference after fixing every proven result objective. Install the updated
 `requirements.txt` to enable circular-result optimization.
 
 Ranking calculations have a shared 30-second budget and are cached by normalized
 results, cutoff, and algorithm version. **Provisional** means best found, not proven
-optimal. Expand calculation details to inspect objective values, proof statuses, and
+optimal. **All results fit** means zero exceptions, not a unique ranking. The page
+identifies multiple valid orders in acyclic graphs and reports separately when the
+time budget leaves the résumé tiebreak incomplete. Expand calculation details to inspect objective values, proof statuses, and
 the first unproven objective's lower bound. Every direct-result exception is listed.
 Positions represent one ordering; they need not be unique. Corrected scores clear
 cached identities and stale previews after the normal five-minute source refresh.
 
 After all priorities are proven, **Calculate optimal rank ranges** supports up to
 five selected teams with a separate shared 30-second budget. Exact endpoints are
-the best and worst positions among optimal orders. Incomplete endpoints are
+the best and worst positions among optimal result orders **before** the résumé
+tiebreaker, so the remaining flexibility stays visible. Incomplete endpoints are
 conservative outer bounds, not proven attainable positions; intermediate positions
 and different teams' endpoints need not be jointly attainable.
 
 The chain explorer uses one deterministic shortest path per direction, with the
 earliest available meeting witnessing each repeated edge. Paths need not follow
-game-date order. Circle examples are the shortest cycle found for each team,
-deduplicated by rotation and capped at 50 after filtering; longer cycles may exist.
+game-date order. **Search longest circles** searches simple cycles longest-first,
+with a selectable maximum of 2–16 teams (default 16), optional team filter, and
+15/30/60/120-second budget (default 60). Search runs explicitly and returns up to
+50 rotation-deduplicated loops. Each team occurs once before the loop closes.
+The page distinguishes longest found from longest proven within the chosen size
+limit, and reports whether time or the result limit stopped enumeration. Short
+examples may be available even if time expires before finding a longer circle.
 Two-team circles represent split rematches. **Show Top 25 graphic**, **Show matchup
 chain graphics**, and **Show Circle of Chaos graphic** produce copyable 2160 × 2700
 PNGs with scope/cutoff labels. Long chains paginate without losing games. The Top 25
 graphic uses national ranks regardless of table filters; provisional rankings carry
 a provisional label. Missing logos fall back to initials and readable team names.
+Circles with more than six teams use a numbered overview plus paginated game
+evidence, retaining all links including the final win that closes the loop.
 
 Focused checks: `python -m pytest tests/test_head_to_head*.py -q` and
 `node --test tests/test_head_to_head_graphics.cjs`. Optimizer tests compare small

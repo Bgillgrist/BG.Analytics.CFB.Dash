@@ -23,13 +23,16 @@ def graphic_config(dataset, kind, ranking=None, paths=(), cycle=()):
     config = {"season": dataset.season, "cutoff": checkpoint_label(dataset.cutoff), "kind": kind,
               "status": ranking.status if ranking else "Completed results", "slides": []}
     if kind == "rankings":
+        config["tiebreak"] = "FBS win % → FBS wins → Opponent win %"
+        if ranking.optimal and ranking.tiebreak_positions < len(ranking.order):
+            config["status"] += " · Tiebreak incomplete"
         frame = ranking_rows(dataset, ranking)
         rows = []
         for row in frame.dropna(subset=["position"]).head(25).itertuples():
             rows.append({**team_payload(dataset, row.team), "position": int(row.position),
                          "record": row.record, "exceptions": row.exceptions})
         config["slides"] = [{"title": "HEAD TO HEAD TOP 25", "rows": rows,
-                             "subtitle": "One representative order · Positions may not be unique"}]
+                             "subtitle": "Results first · Résumé tiebreak · Positions may not be unique"}]
     elif kind == "chains":
         for source, target, path in paths:
             games = path_games(dataset.games, path) if path else ()
@@ -39,9 +42,16 @@ def graphic_config(dataset, kind, ranking=None, paths=(), cycle=()):
                     "detail": f"{len(games)}-game chain · Part {index}/{len(chunks)}" if path else "No win path in this direction",
                     "games": [game_payload(dataset, g) for g in chunk]})
     elif kind == "circle":
+        games = path_games(dataset.games, (*cycle, cycle[0]))
         config["slides"] = [{"title": "CIRCLE OF CHAOS", "subtitle": f"{len(cycle)} teams · Every arrow is a win",
                              "teams": [team_payload(dataset, n) for n in cycle],
-                             "games": [game_payload(dataset, g) for g in path_games(dataset.games, (*cycle, cycle[0]))]}]
+                             "games": [game_payload(dataset, g) for g in games]}]
+        if len(cycle) > 6:
+            config["slides"][0]["detail"] = "Numbered overview · Scores and dates on following slides"
+            for offset in range(0, len(games), 5):
+                config["slides"].append({"title": "CIRCLE OF CHAOS", "subtitle": f"{len(cycle)}-team circle · Game evidence",
+                    "detail": f"Links {offset + 1}–{min(offset + 5, len(games))} of {len(games)} · Final link closes the circle",
+                    "layout": "games", "games": [game_payload(dataset, g) for g in games[offset:offset + 5]]})
     else:
         raise ValueError("Unknown graphic type")
     return config
@@ -71,7 +81,9 @@ def chain_markup(dataset, path):
 
 def circle_svg(dataset, cycle):
     """Responsive SVG; game table below supplies full names and dated evidence."""
-    size, center, radius = 900, 450, 295
+    large = len(cycle) > 6
+    size, center, radius = 900, 450, 355 if large else 295
+    half_width, half_height = (48, 44) if large else (132, 58)
     points = [(center + radius * math.cos(-math.pi / 2 + i * 2 * math.pi / len(cycle)),
                center + radius * math.sin(-math.pi / 2 + i * 2 * math.pi / len(cycle))) for i in range(len(cycle))]
     pieces = [f'<svg viewBox="0 0 {size} {size}" style="display:block;width:100%;max-height:760px" role="img" aria-label="Circle of Chaos" xmlns="http://www.w3.org/2000/svg">',
@@ -82,15 +94,18 @@ def circle_svg(dataset, cycle):
         length = math.hypot(dx, dy)
         # Opposite rematch arrows occupy separate parallel lanes.
         ox, oy = (-dy / length * 18, dx / length * 18) if len(cycle) == 2 else (0, 0)
-        clearance = min(132 / max(.0001, abs(dx / length)), 58 / max(.0001, abs(dy / length))) + 15
+        clearance = min(half_width / max(.0001, abs(dx / length)), half_height / max(.0001, abs(dy / length))) + 15
         pieces.append(f'<line x1="{x + dx / length * clearance + ox}" y1="{y + dy / length * clearance + oy}" x2="{nx - dx / length * clearance + ox}" y2="{ny - dy / length * clearance + oy}" stroke="#ad7735" stroke-width="4" marker-end="url(#h2h-arrow)"/>')
-    for name, (x, y) in zip(cycle, points):
-        pieces.append(f'<rect x="{x - 132}" y="{y - 58}" width="264" height="116" rx="16" fill="#edf3fa" stroke="#bdcbd9"/>')
+    for number, (name, (x, y)) in enumerate(zip(cycle, points), 1):
+        pieces.append(f'<g><title>{number}. {html.escape(name)}</title><rect x="{x - half_width}" y="{y - half_height}" width="{half_width * 2}" height="{half_height * 2}" rx="16" fill="#edf3fa" stroke="#bdcbd9"/>')
         logo = team_payload(dataset, name)["logo"]
         if logo.startswith(("http://", "https://", "data:image/")):
-            pieces.append(f'<image href="{html.escape(logo, quote=True)}" x="{x - 25}" y="{y - 48}" width="50" height="50"/>')
+            pieces.append(f'<image href="{html.escape(logo, quote=True)}" x="{x - 25}" y="{y - 38}" width="50" height="50"/>')
         words = name.split()
         lines = [name] if len(name) <= 23 else [" ".join(words[:max(1, len(words)//2)]), " ".join(words[max(1, len(words)//2):])]
+        if large:
+            lines = [str(number)]
         for index, line in enumerate(lines):
             pieces.append(f'<text x="{x}" y="{y + 24 + index * 22}" text-anchor="middle" fill="#0c2c50" font-family="Arial" font-size="{min(20, 230/max(1,len(line)) * 1.7)}">{html.escape(line)}</text>')
+        pieces.append('</g>')
     return "".join(pieces) + "</svg>"

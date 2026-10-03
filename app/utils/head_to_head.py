@@ -2,6 +2,7 @@
 
 from collections import Counter, deque
 from dataclasses import dataclass
+from fractions import Fraction
 import hashlib
 import heapq
 import math
@@ -9,7 +10,7 @@ import time
 
 import pandas as pd
 
-API_VERSION = 1
+API_VERSION = 2
 PHASES = {"regular": 0, "postseason": 1}
 
 
@@ -55,6 +56,8 @@ class Ranking:
     bound: float | None = None  # lower bound for first unproven layer
     active_distance: int | None = None
     fingerprint: str = ""
+    tiebreak_positions: int = 0
+    order_unique: bool | None = None  # head-to-head evidence alone, before tiebreaking
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,14 @@ class RankRange:
     high: int
     low_exact: bool
     high_exact: bool
+
+
+@dataclass(frozen=True)
+class CycleSearch:
+    cycles: tuple
+    exhaustive: bool
+    longest_proven: bool
+    reason: str
 
 
 def clean(value):
@@ -213,27 +224,85 @@ def objective_vector(order, layers):
     return tuple(sum(w for a, b, w in pairs if positions[a] > positions[b]) for pairs in layers.values())
 
 
-def topological_order(edges):
+def resume_stats(games):
+    """Exact fractions avoid accidental float ties. OWP excludes games vs this team.
+
+    Opponents' remaining records are pooled, once per matchup (including rematches).
+    With no remaining opponent games, the schedule-strength tiebreak is zero.
+    """
+    wins = Counter(g.winner for g in games)
+    losses = Counter(g.loser for g in games)
+    meetings = Counter((g.winner, g.loser) for g in games)
+    opponents = {n: [] for n in graph(games)}
+    for g in games:
+        opponents[g.winner].append(g.loser)
+        opponents[g.loser].append(g.winner)
+    stats = {}
+    for name, rivals in opponents.items():
+        ow = sum(wins[o] - meetings[o, name] for o in rivals)
+        ol = sum(losses[o] - meetings[name, o] for o in rivals)
+        stats[name] = (Fraction(wins[name], wins[name] + losses[name]), wins[name], Fraction(ow, ow + ol) if ow + ol else Fraction(0))
+    return stats
+
+
+def resume_order(games):
+    stats = resume_stats(games)
+    return tuple(sorted(stats, key=lambda n: (*(-value for value in stats[n]), n)))
+
+
+def topological_order(edges, preference=None):
+    priority = {n: i for i, n in enumerate(preference or sorted(edges))}
     indegree = Counter(b for values in edges.values() for b in values)
-    ready = [n for n in edges if not indegree[n]]
+    ready = [(priority[n], n) for n in edges if not indegree[n]]
     heapq.heapify(ready)
     result = []
     while ready:
-        current = heapq.heappop(ready)
+        _, current = heapq.heappop(ready)
         result.append(current)
         for target in edges[current]:
             indegree[target] -= 1
             if not indegree[target]:
-                heapq.heappush(ready, target)
+                heapq.heappush(ready, (priority[target], target))
     return tuple(result) if len(result) == len(edges) else None
 
 
 def initial_order(edges, games):
-    net = Counter()
-    for game in games:
-        net[game.winner] += 1
-        net[game.loser] -= 1
-    return tuple(sorted(edges, key=lambda n: (-net[n], n)))
+    return resume_order(games)
+
+
+def break_solver_ties(model, positions, order, games, deadline):
+    """Lexicographically prefer the best résumé at each position, within fixed optima.
+
+    This agrees with the DAG ready-team rule. It never turns a résumé preference
+    into an additional result constraint for pre-tiebreak rank ranges.
+    """
+    from ortools.sat.python import cp_model
+    preference = resume_order(games)
+    count = len(preference)
+    zero_positions = [model.new_int_var(0, count - 1, f"zero_{i}") for i in range(count)]
+    at_position = [model.new_int_var(0, count - 1, f"occupant_{i}") for i in range(count)]
+    for name, zero in zip(preference, zero_positions):
+        model.add(zero == positions[name] - 1)
+    model.add_inverse(zero_positions, at_position)
+    fixed = 0
+    for variable in at_position:
+        if time.monotonic() >= deadline:
+            break
+        model.minimize(variable)
+        solver = new_solver(deadline - time.monotonic())
+        status = solver.solve(model)
+        if status in (cp_model.INFEASIBLE, cp_model.MODEL_INVALID):
+            raise RuntimeError("Tiebreak model failed validation.")
+        if status in (cp_model.FEASIBLE, cp_model.OPTIMAL):
+            order = tuple(sorted(positions, key=lambda name: solver.value(positions[name])))
+        if status != cp_model.OPTIMAL:
+            break
+        model.add(variable == solver.value(variable))
+        fixed += 1
+        model.clear_hints()
+        for index, name in enumerate(order, 1):
+            model.add_hint(positions[name], index)
+    return order, fixed
 
 
 def build_model(nodes, layers, hint, deadline):
@@ -278,9 +347,12 @@ def solve_ranking(dataset, seconds=30):
     layers = layers_for(dataset.games, edges)
     if not edges:
         return Ranking((), (), True, "No eligible results", fingerprint=dataset.fingerprint)
-    dag = topological_order(edges)
+    dag = topological_order(edges, resume_order(dataset.games))
     if dag is not None:
-        return Ranking(dag, tuple((d, 0, True) for d in layers), True, "Proven optimal", fingerprint=dataset.fingerprint)
+        # A DAG has a unique order iff every consecutive pair is linked by an edge.
+        unique = all(b in edges[a] for a, b in zip(dag, dag[1:]))
+        return Ranking(dag, tuple((d, 0, True) for d in layers), True, "All results fit", fingerprint=dataset.fingerprint,
+                       tiebreak_positions=len(dag), order_unique=unique)
     from ortools.sat.python import cp_model
     order = initial_order(edges, dataset.games)
     built = build_model(tuple(edges), layers, order, deadline)
@@ -309,10 +381,13 @@ def solve_ranking(dataset, seconds=30):
                 model.add_hint(positions[name], index)
             bound = None
     optimal = len(proven) == len(layers)
+    tiebreak_positions = 0
+    if optimal:
+        order, tiebreak_positions = break_solver_ties(model, positions, order, dataset.games, deadline)
     values = objective_vector(order, layers)
     objectives = tuple((distance, value, distance in proven) for distance, value in zip(layers, values))
-    return Ranking(order, objectives, optimal, "Proven optimal" if optimal else "Provisional · best found",
-                   bound, None if optimal else active, dataset.fingerprint)
+    return Ranking(order, objectives, optimal, "Best fit proven" if optimal else "Provisional · best found",
+                   bound, None if optimal else active, dataset.fingerprint, tiebreak_positions)
 
 
 def calculate_ranges(dataset, ranking, selected, seconds=30):
@@ -374,10 +449,13 @@ def ranking_rows(dataset, ranking, ranges=()):
     losses = Counter(g.loser for g in dataset.games)
     exceptions = Counter(n for g in exception_games(dataset, ranking) for n in (g.winner, g.loser))
     intervals = {r.team: f"{r.low}–{r.high}" + (" (bounds incomplete)" if not (r.low_exact and r.high_exact) else "") for r in ranges}
+    stats = resume_stats(dataset.games)
     return pd.DataFrame([dict(position=pos.get(t.name), team=t.name, logo=t.logo, conference=t.conference,
                               record=f"{wins[t.name]}–{losses[t.name]}", exceptions=exceptions[t.name],
+                              win_pct=float(stats[t.name][0]) if t.name in stats else None,
+                              opponent_win_pct=float(stats[t.name][2]) if t.name in stats else None,
                               rank_range=intervals.get(t.name, "Not calculated" if t.name in pos else "Unranked"))
-                         for t in dataset.teams], columns=["position", "team", "logo", "conference", "record", "exceptions", "rank_range"]).sort_values(["position", "team"], na_position="last")
+                         for t in dataset.teams], columns=["position", "team", "logo", "conference", "record", "win_pct", "opponent_win_pct", "exceptions", "rank_range"]).sort_values(["position", "team"], na_position="last")
 
 
 def path_games(games, path):
@@ -401,6 +479,90 @@ def short_cycles(games, team=None, limit=50):
             found.add(min(cycle[i:] + cycle[:i] for i in range(len(cycle))))
     cycles = sorted((c for c in found if not team or team in c), key=lambda c: (len(c), c))
     return tuple(cycles[:limit]), len(cycles) > limit
+
+
+def longest_cycles(games, team=None, max_teams=16, limit=50, seconds=60):
+    """Search simple cycles longest-first; every node occurs once before closing.
+
+    Canonical roots avoid rotational duplicates. Shortest-return distances prune
+    impossible branches. A bounded search never claims the best found is longest
+    unless longer lengths were exhausted or the requested cap was reached.
+    """
+    if not 2 <= max_teams <= 16 or limit < 1:
+        raise ValueError("Choose 2–16 teams and a positive result limit.")
+    deadline = time.monotonic() + seconds
+    edges = graph(games)
+    paths = {a: shortest_paths(edges, a) for a in edges}
+    found = set()
+    for source in edges:
+        choices = [(source, *paths[target][source]) for target in edges[source] if source in paths[target]]
+        if choices:
+            cycle = min(choices, key=lambda c: (len(c), c))[:-1]
+            if len(cycle) <= max_teams and (not team or team in cycle):
+                found.add(min(cycle[i:] + cycle[:i] for i in range(len(cycle))))
+    roots = [team] if team in edges else ([] if team else sorted(edges))
+    root_graphs = []
+    for root in roots:
+        component = {a for a in paths[root] if root in paths[a] and (team or a >= root)}
+        if len(component) < 2:
+            continue
+        reverse = {a: [] for a in component}
+        local = {a: tuple(sorted((b for b in edges[a] if b in component), key=lambda b: (-len(edges[b]), b))) for a in component}
+        for a, targets in local.items():
+            for b in targets:
+                reverse[b].append(a)
+        distances = {root: 0}
+        queue = deque([root])
+        while queue:
+            current = queue.popleft()
+            for previous in reverse[current]:
+                if previous not in distances:
+                    distances[previous] = distances[current] + 1
+                    queue.append(previous)
+        root_graphs.append((root, local, distances))
+    completed_lengths = set()
+    reason = "Complete"
+    for length in range(max_teams, 1, -1):
+        stopped = False
+        for root, local, distances in root_graphs:
+            if len(local) < length:
+                continue
+            path, visited = [root], {root}
+
+            def visit(current):
+                nonlocal reason
+                if time.monotonic() >= deadline:
+                    reason = "Time limit"
+                    return True
+                if len(path) == length:
+                    if root in local[current]:
+                        cycle = tuple(path)
+                        found.add(min(cycle[i:] + cycle[:i] for i in range(len(cycle))))
+                        if sum(len(c) >= length for c in found) >= limit:
+                            reason = "Result limit"
+                            return True
+                    return False
+                for target in local[current]:
+                    if target in visited or distances.get(target, length + 1) > length - len(path):
+                        continue
+                    visited.add(target)
+                    path.append(target)
+                    stop = visit(target)
+                    path.pop()
+                    visited.remove(target)
+                    if stop:
+                        return True
+                return False
+
+            if visit(root):
+                stopped = True
+                break
+        if stopped:
+            break
+        completed_lengths.add(length)
+    cycles = tuple(sorted(found, key=lambda c: (-len(c), c))[:limit])
+    proven = bool(cycles) and all(length in completed_lengths for length in range(len(cycles[0]) + 1, max_teams + 1))
+    return CycleSearch(cycles, reason == "Complete", proven, reason)
 
 
 def game_rows(games):
