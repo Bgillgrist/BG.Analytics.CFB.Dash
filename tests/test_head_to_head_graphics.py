@@ -15,6 +15,8 @@ def test_top25_is_national_and_preserves_provisional_label(monkeypatch):
     config = g.graphic_config(data,"rankings",ranking=result)
     assert len(config["slides"][0]["rows"]) == 25
     assert config["status"] == "Provisional · best found"
+    assert config["tiebreak"] == "Fewer FBS losses → More FBS wins → Opponent win %"
+    assert config["slides"][0]["subtitle"] == "Direct wins → Two-game chains → Record → Résumé"
     monkeypatch.setattr(g,"embed_conquest_logos",lambda teams: None)
     markup = g.render_graphic(config)
     payload = json.loads(re.search(r"const config = (.*);",markup).group(1))

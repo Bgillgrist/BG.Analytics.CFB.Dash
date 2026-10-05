@@ -23,7 +23,7 @@ def graphic_config(dataset, kind, ranking=None, paths=(), cycle=()):
     config = {"season": dataset.season, "cutoff": checkpoint_label(dataset.cutoff), "kind": kind,
               "status": ranking.status if ranking else "Completed results", "slides": []}
     if kind == "rankings":
-        config["tiebreak"] = "FBS win % → FBS wins → Opponent win %"
+        config["tiebreak"] = "Fewer FBS losses → More FBS wins → Opponent win %"
         if ranking.optimal and ranking.tiebreak_positions < len(ranking.order):
             config["status"] += " · Tiebreak incomplete"
         frame = ranking_rows(dataset, ranking)
@@ -32,7 +32,7 @@ def graphic_config(dataset, kind, ranking=None, paths=(), cycle=()):
             rows.append({**team_payload(dataset, row.team), "position": int(row.position),
                          "record": row.record, "exceptions": row.exceptions})
         config["slides"] = [{"title": "HEAD TO HEAD TOP 25", "rows": rows,
-                             "subtitle": "Results first · Résumé tiebreak · Positions may not be unique"}]
+                             "subtitle": "Direct wins → Two-game chains → Record → Résumé"}]
     elif kind == "chains":
         for source, target, path in paths:
             games = path_games(dataset.games, path) if path else ()

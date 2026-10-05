@@ -11,12 +11,18 @@ results, not historical database snapshots. Invalid completed records and confli
 duplicate IDs are excluded and counted; identical duplicate games count once.
 
 The optimizer first minimizes direct-result exceptions (a winner below its loser),
-then reversed pairs at shortest distance two, three, and onward. Repeated meetings
-count separately at distance one; each indirect ordered pair counts only once at
-its shortest distance. Later priorities cannot worsen earlier proven optima. Scores,
+then reversed pairs at shortest distance two. Repeated meetings count separately
+at distance one; each indirect ordered pair counts once at distance two. Chains of
+three or more games remain in the explorer but add no separate ranking objective.
+Following all direct results can still imply a longer chain's ordering.
+Later priorities cannot worsen earlier proven optima. Scores,
 polls, rating models, and victory margins do not break ties. After fixing the result
-priorities, fill positions in order using FBS winning percentage, then FBS wins,
-then opponents' FBS winning percentage. Opponent records exclude games against the
+priorities, fill positions in order by record (fewer FBS losses, then more FBS wins),
+then résumé (opponents' FBS winning percentage). FBS-undefeated teams are always
+ahead of teams with FBS losses, even in provisional solutions; this cannot worsen
+result objectives because undefeated teams have no incoming win paths. Other
+record preferences yield to direct and two-game priorities. Winning percentage is
+displayed only as context. Opponent records exclude games against the
 evaluated team, pool remaining wins/losses, and count repeated opponents per matchup;
 no remaining games gives a zero schedule tiebreak value. Alphabetical order is the
 last fallback for equal résumés. Acyclic graphs pick the best available résumé at
@@ -28,15 +34,16 @@ Ranking calculations have a shared 30-second budget and are cached by normalized
 results, cutoff, and algorithm version. **Provisional** means best found, not proven
 optimal. **All results fit** means zero exceptions, not a unique ranking. The page
 identifies multiple valid orders in acyclic graphs and reports separately when the
-time budget leaves the résumé tiebreak incomplete. Expand calculation details to inspect objective values, proof statuses, and
+time budget leaves record/résumé tiebreaks incomplete. Expand calculation details to inspect objective values, proof statuses, and
 the first unproven objective's lower bound. Every direct-result exception is listed.
 Positions represent one ordering; they need not be unique. Corrected scores clear
 cached identities and stale previews after the normal five-minute source refresh.
 
 After all priorities are proven, **Calculate optimal rank ranges** supports up to
 five selected teams with a separate shared 30-second budget. Exact endpoints are
-the best and worst positions among optimal result orders **before** the résumé
-tiebreaker, so the remaining flexibility stays visible. Incomplete endpoints are
+the best and worst positions among optimal direct/two-game result orders **before**
+record and résumé tiebreaks (including the undefeated rule), so the remaining
+flexibility stays visible. Incomplete endpoints are
 conservative outer bounds, not proven attainable positions; intermediate positions
 and different teams' endpoints need not be jointly attainable.
 

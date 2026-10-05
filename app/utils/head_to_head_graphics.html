@@ -50,7 +50,7 @@ button:focus-visible {outline:3px solid #398ddd} img {display:block;width:100%;m
     if(slide.detail)text(ctx,slide.detail,80,630,2000,42,muted);
     if(config.tiebreak)text(ctx,`Tiebreak: ${config.tiebreak}`,80,630,2000,38,muted);
     ctx.fillStyle=navy;ctx.fillRect(0,2485,width,215);
-    const note=config.kind==="rankings"?"Direct results first. Then shortest 2-game chains, 3-game chains, and onward.":config.kind==="chains"?"Every arrow is a completed win. Chains need not follow game-date order.":"Every arrow is a completed win. Circular results cannot all fit one ranking.";
+    const note=config.kind==="rankings"?"Direct wins → Two-game chains → Record → Résumé. Results may allow multiple orders.":config.kind==="chains"?"Every arrow is a completed win. Chains need not follow game-date order.":"Every arrow is a completed win. Circular results cannot all fit one ranking.";
     text(ctx,note,80,2530,2000,36,"white");
     text(ctx,`Results only · Scores shown as context · ${index+1}/${config.slides.length}`,80,2600,2000,34,gold);
   }

@@ -106,12 +106,63 @@ def test_shortest_distances_count_pairs_once_and_keep_rematches():
     layers = h.layers_for(data.games)
     assert ("A","B",2) in layers[1]
     assert layers[2].count(("A","D",1)) == 1
-    assert ("A","E",1) in layers[3]
+    assert set(layers) == {1, 2}
+    assert h.shortest_paths(h.graph(data.games), "A")["E"] == ("A", "B", "D", "E")
     assert h.shortest_paths(h.graph(data.games),"A")["D"] == ("A","B","D")
     assert "A" not in h.shortest_paths(h.graph(data.games),"E")
     assert h.path_games(data.games,("A","B"))[0].id == "0"
     unknown_date = replace(data.games[0], id="unknown", date="")
     assert h.path_games((unknown_date, *data.games), ("A", "B"))[0].id == "0"
+
+
+def test_missouri_two_game_claim_precedes_better_ole_miss_record():
+    data = dataset([("Missouri", "Florida"), ("Florida", "Ole Miss"),
+                    ("First winner", "Missouri"), ("Second winner", "Missouri"),
+                    ("Ole Miss", "Other team")])
+    assert ("Missouri", "Ole Miss", 1) in h.layers_for(data.games)[2]
+    # Missouri is 1–2; Ole Miss is 1–1. The win chain takes priority.
+    result = h.solve_ranking(data)
+    assert result.order.index("Missouri") < result.order.index("Florida") < result.order.index("Ole Miss")
+    assert all(d <= 2 for d, _, _ in result.objectives)
+
+
+def test_fewer_losses_precede_higher_win_percentage_and_resume():
+    data = dataset([("Many wins", f"Opponent {i}") for i in range(4)] + [
+        ("Undefeated 1", "Many wins"), ("Undefeated 2", "Many wins"),
+        ("Fewer losses", "Other"), ("Undefeated 3", "Fewer losses")])
+    stats = h.resume_stats(data.games)
+    assert stats["Many wins"][0] > stats["Fewer losses"][0]  # 4–2 vs 1–1
+    result = h.solve_ranking(data)
+    assert result.order.index("Fewer losses") < result.order.index("Many wins")
+    unbeaten = {"Undefeated 1", "Undefeated 2", "Undefeated 3"}
+    assert set(result.order[:3]) == unbeaten
+
+
+def test_wins_precede_resume_when_loss_counts_match():
+    data = dataset([("Zulu", "Weak 1"), ("Zulu", "Weak 2"),
+                    ("Alpha", "Strong"), ("Strong", "Weak 1"), ("Strong", "Weak 2")])
+    stats = h.resume_stats(data.games)
+    assert stats["Alpha"][2] > stats["Zulu"][2]
+    assert h.solve_ranking(data).order[:2] == ("Zulu", "Alpha")
+
+
+def test_unbeaten_guard_preserves_result_optima_and_pre_record_ranges():
+    pytest.importorskip("ortools")
+    import time
+    from ortools.sat.python import cp_model
+    data = dataset([("A", "B"), ("B", "C"), ("C", "A"), ("Unbeaten", "Other")])
+    best, orders = brute(data)
+    result = h.solve_ranking(data, seconds=10)
+    assert tuple(v for _, v, _ in result.objectives) == best
+    assert result.order[0] == "Unbeaten"
+    layers = h.layers_for(data.games)
+    model, positions, _ = h.build_model(tuple(h.graph(data.games)), layers, result.order,
+                                        time.monotonic() + 10, protect_unbeaten=True)
+    model.add(positions["A"] < positions["Unbeaten"])
+    assert h.new_solver(5).solve(model) == cp_model.INFEASIBLE
+    # Evidence-only ranges intentionally leave out the later record preference.
+    interval = h.calculate_ranges(data, result, ["Unbeaten"], seconds=10)[0]
+    assert interval.high == max(o.index("Unbeaten") + 1 for o in orders) > 1
 
 
 def test_cycles_split_rematches_dedup_filters_and_long_cycles():

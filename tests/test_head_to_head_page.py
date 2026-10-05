@@ -37,6 +37,8 @@ def test_explicit_calculation_filters_and_ranges(page):
     page.run()
     assert not page.exception
     assert [t.label for t in page.tabs] == ["Rankings","Win-chain explorer","Circle of Chaos"]
+    assert any("fewer FBS losses" in item.value for item in page.markdown)
+    assert any("Missouri → Florida → Ole Miss" in item.value for item in page.markdown)
     assert "h2h_result" not in page.session_state
     widget(page.button,"Calculate rankings").click().run()
     assert not page.exception

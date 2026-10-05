@@ -55,11 +55,13 @@ st.caption("Who beat whom. Explore the rankings, the connections, and the contra
 
 with st.expander("How the rankings work"):
     st.markdown("Direct wins come first: minimize games whose winner ranks below the loser. Among equally good orders, "
-                "minimize reversed two-game chains, then three-game chains, and so on. Each pair contributes once at its "
-                "shortest distance; repeated games count individually as direct results. Scores, polls, and power ratings do not influence ranks.")
-    st.markdown("Among equally good result orders, fill each position with the best available résumé: **FBS winning percentage → FBS wins → "
-                "opponents' FBS winning percentage**. Opponent records exclude games against the team being ranked; repeated opponents count once per meeting. "
+                "minimize reversed two-game chains: Missouri → Florida → Ole Miss supports Missouri above Ole Miss. Each pair contributes once at its "
+                "shortest distance; repeated games count individually as direct results. Three-game and longer chains add no separate ranking priority, but remain in the explorer.")
+    st.markdown("Then fill each position by **record: fewer FBS losses → more FBS wins**, followed by **résumé: opponents' FBS winning percentage**. "
+                "FBS-undefeated teams stay above teams with FBS losses. Direct and two-game priorities otherwise take precedence over record. "
+                "Opponent records exclude games against the team being ranked; repeated opponents count once per meeting. "
                 "Alphabetical order is only the final fallback when these values also tie. No opponent games means a schedule tiebreak value of zero.")
+    st.caption("Scores, polls, and power ratings do not influence ranks. All records use only eligible FBS games through the selected cutoff.")
     st.caption("A → B means A beat B. Circular results make a perfect ordering impossible. The list is one representative "
                "order; positions may not be unique. Calculations run only when requested, for up to 30 seconds each. "
                "Historical weeks use today's stored corrected results, not historical database snapshots.")
@@ -126,16 +128,16 @@ with tabs[0]:
         c.metric("Exceptions", len(exceptions))
         d.metric("Results fit", ("All results fit" if not exceptions else "Best fit proven") if ranking.optimal else "Provisional")
         st.info("A best fit is not necessarily a unique ranking. Zero exceptions means every included winner is above its loser; many different orders may do that. "
-                "The résumé tiebreaker selects among those orders. A team with losses can still rank highly; only FBS games through the selected cutoff count.")
+                "Record, then résumé, select among those orders. Only FBS games through the selected cutoff count.")
         if ranking.order_unique is False:
             st.caption("Confirmed: multiple equally valid head-to-head orders exist for these results.")
         elif ranking.order_unique is True:
             st.caption("These head-to-head results determine a unique ordering of the ranked teams.")
         if ranking.optimal and ranking.tiebreak_positions < len(ranking.order):
-            st.warning(f"Result priorities are proven, but the time budget ended before all résumé tiebreaks were resolved. "
+            st.warning(f"Result priorities are proven, but the time budget ended before all record/résumé tiebreaks were resolved. "
                        f"Tiebreaks finalized for the first {ranking.tiebreak_positions} positions.")
         else:
-            st.caption("Tiebreak: FBS win percentage, then FBS wins, then opponents' FBS win percentage. Direct results and chain priorities always come first.")
+            st.caption("Order: direct results → two-game win chains → fewer FBS losses → more FBS wins → opponents' FBS win percentage.")
         if not ranking.optimal:
             st.warning("Best order found within the budget; optimality is not yet proven for all priorities.")
         with st.expander("Calculation details and proof status"):
@@ -157,7 +159,7 @@ with tabs[0]:
                         st.session_state.h2h_ranges = ranges
                     except Exception:
                         st.error("Rank ranges could not be calculated. Try again.")
-                st.caption("Ranges show the flexibility in head-to-head evidence BEFORE the résumé tiebreaker. Exact ranges give the best and worst position across all optimal result orders. Incomplete ranges are conservative outer bounds. "
+                st.caption("Ranges show the flexibility in direct/two-game evidence BEFORE record and résumé tiebreaks (including the undefeated rule). Exact ranges give the best and worst position across all optimal result orders. Incomplete ranges are conservative outer bounds. "
                            "Intermediate positions and different teams' endpoints are not necessarily jointly attainable.")
                 calculated = st.session_state.get("h2h_ranges", ())
                 if calculated:
@@ -179,7 +181,7 @@ with tabs[0]:
         st.dataframe(visible, hide_index=True, use_container_width=True, column_config={
             "position": st.column_config.NumberColumn("Position", format="%d"), "team": "Team",
             "logo": st.column_config.ImageColumn("Logo"), "conference": "Conference", "record": "FBS record",
-            "win_pct": st.column_config.NumberColumn("FBS win pct", format="%.3f"),
+            "win_pct": st.column_config.NumberColumn("FBS win pct", format="%.3f", help="Context only. Record tiebreaks use fewer losses, then more wins—not winning percentage."),
             "opponent_win_pct": st.column_config.NumberColumn("Opponent win pct", format="%.3f", help="Pooled FBS opponent records, excluding games against this team; repeated opponents count per meeting."),
             "exceptions": "Exceptions", "rank_range": "Optimal rank range"})
         with st.expander(f"Direct-result exceptions ({len(exceptions)})"):

@@ -10,7 +10,7 @@ import time
 
 import pandas as pd
 
-API_VERSION = 2
+API_VERSION = 3
 PHASES = {"regular": 0, "postseason": 1}
 
 
@@ -208,13 +208,18 @@ def shortest_paths(edges, source):
 
 
 def layers_for(games, edges=None):
+    """Only direct results and shortest two-game chains precede record tiebreaks.
+
+    Longer paths still exist in the explorers, and following direct edges in an
+    acyclic graph naturally also respects their transitive ordering.
+    """
     edges = graph(games) if edges is None else edges
     direct = Counter((g.winner, g.loser) for g in games)
     layers = {1: [(a, b, weight) for (a, b), weight in sorted(direct.items())]}
     for source in edges:
         for target, path in shortest_paths(edges, source).items():
             distance = len(path) - 1
-            if distance > 1:
+            if distance == 2:
                 layers.setdefault(distance, []).append((source, target, 1))
     return dict(sorted(layers.items()))
 
@@ -246,8 +251,10 @@ def resume_stats(games):
 
 
 def resume_order(games):
+    """Position preference: fewest FBS losses, most wins, then opponent résumé."""
     stats = resume_stats(games)
-    return tuple(sorted(stats, key=lambda n: (*(-value for value in stats[n]), n)))
+    losses = Counter(g.loser for g in games)
+    return tuple(sorted(stats, key=lambda n: (losses[n], -stats[n][1], -stats[n][2], n)))
 
 
 def topological_order(edges, preference=None):
@@ -271,7 +278,7 @@ def initial_order(edges, games):
 
 
 def break_solver_ties(model, positions, order, games, deadline):
-    """Lexicographically prefer the best résumé at each position, within fixed optima.
+    """Prefer record, then opponent résumé at each position within fixed optima.
 
     This agrees with the DAG ready-team rule. It never turns a résumé preference
     into an additional result constraint for pre-tiebreak rank ranges.
@@ -305,13 +312,23 @@ def break_solver_ties(model, positions, order, games, deadline):
     return order, fixed
 
 
-def build_model(nodes, layers, hint, deadline):
+def build_model(nodes, layers, hint, deadline, protect_unbeaten=False):
     from ortools.sat.python import cp_model
     model = cp_model.CpModel()
     positions = {n: model.new_int_var(1, len(nodes), f"rank_{i}") for i, n in enumerate(nodes)}
     model.add_all_different(list(positions.values()))
     for index, name in enumerate(hint, 1):
         model.add_hint(positions[name], index)
+    if protect_unbeaten:
+        beaten = {b for _, b, _ in layers[1]}
+        for unbeaten in sorted(set(nodes) - beaten):
+            for other in sorted(beaten):
+                if time.monotonic() >= deadline:
+                    return None
+                model.add(positions[unbeaten] < positions[other])
+        # An unbeaten team has no incoming direct or indirect win path. Moving
+        # it ahead cannot worsen either result objective, even in a cyclic graph.
+        # Keep this guard out of pre-record rank-range calculations.
     pairs = {}
     expressions = {}
     for distance, values in layers.items():
@@ -355,7 +372,7 @@ def solve_ranking(dataset, seconds=30):
                        tiebreak_positions=len(dag), order_unique=unique)
     from ortools.sat.python import cp_model
     order = initial_order(edges, dataset.games)
-    built = build_model(tuple(edges), layers, order, deadline)
+    built = build_model(tuple(edges), layers, order, deadline, protect_unbeaten=True)
     proven, bound, active = set(), None, 1
     if built:
         model, positions, expressions = built
