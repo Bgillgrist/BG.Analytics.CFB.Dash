@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;color:#172b45;font:14px system-ui,sans-serif}.actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+button{padding:10px 18px;border:1px solid #bdcbd9;border-radius:8px;background:#0c2c56;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}
+button:focus-visible{outline:3px solid #d5ac60}p{line-height:1.5}.preview{position:relative;max-width:800px}img{display:block;width:100%;height:auto}
+#tooltip{display:none;position:absolute;z-index:2;background:#fff;border:1px solid #b9c6d6;border-radius:8px;box-shadow:0 3px 15px #0002;padding:10px;max-width:330px;max-height:230px;overflow:auto;white-space:pre-line;pointer-events:none;font-size:12px}
+</style></head><body>
+<div class="actions"><button id="copy" disabled>Copy graphic</button><span id="status" role="status">Preparing your graphic…</span></div>
+<p>2160 × 2160 PNG. Copy and paste into your post, or right-click the image and choose Copy Image. Hover over logos for details.</p>
+<div class="preview"><img id="preview" alt=""><div id="tooltip" role="tooltip"></div></div>
+<script>
+const config = __SCATTER_CONFIG__;
+const W=2160, H=2160, NAVY='#0c2c56', GOLD='#cfa95e', MUTED='#52677e';
+function domain(values){
+  const min=Math.min(...values),max=Math.max(...values);
+  const pad=max===min?Math.max(Math.abs(min)*.1, .1):(max-min)*.075;
+  return [min-pad,max+pad];
+}
+function position(value,range,start,end,reverse){
+  let t=(value-range[0])/(range[1]-range[0]);if(reverse)t=1-t;return start+t*(end-start);
+}
+function formatted(value,axis,step){
+  if(axis.rate)return `${(value*100).toLocaleString('en-US',{maximumFractionDigits:step&&step<.001?3:1})}%`;
+  const abs=Math.abs(value);
+  if(abs>=1e7||(abs>0&&abs<.00001))return value.toExponential(2);
+  const decimals=step?Math.max(0,Math.min(6,Math.ceil(-Math.log10(step))+1)):3;
+  return value.toLocaleString('en-US',{maximumFractionDigits:decimals});
+}
+function wrap(ctx,value,max){
+  const lines=[];let line='';
+  for(const word of String(value).split(/\s+/)){
+    if(ctx.measureText(line?line+' '+word:word).width>max&&line){lines.push(line);line='';}
+    if(ctx.measureText(word).width>max){
+      for(const char of word){if(ctx.measureText(line+char).width>max&&line){lines.push(line);line='';}line+=char;}
+    }else line+=(line?' ':'')+word;
+  }
+  if(line)lines.push(line);return lines;
+}
+async function render(){
+  const button=document.getElementById('copy'),status=document.getElementById('status'),preview=document.getElementById('preview');
+  button.disabled=true;
+  try{
+    const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d');
+    const logos=new Map();
+    await Promise.all([...new Map(config.points.map(p=>[p.name,p])).values()].map(async p=>{
+      // Only embedded assets are drawn: unavailable remote logos must not taint the export.
+      if(!p.logo.startsWith('data:image/'))return;
+      const img=await new Promise(resolve=>{const image=new Image();const timer=setTimeout(()=>resolve(null),8000);
+        image.onload=()=>{clearTimeout(timer);resolve(image)};image.onerror=()=>{clearTimeout(timer);resolve(null)};image.src=p.logo;});
+      if(img)logos.set(p.name,img);
+    }));
+    function text(value,x,y,size=38,color=NAVY,align='left',weight=600){
+      ctx.font=`${weight} ${size}px Arial,sans-serif`;ctx.fillStyle=color;ctx.textAlign=align;ctx.textBaseline='top';ctx.fillText(String(value),x,y);
+    }
+    function block(value,x,y,max,size,color=NAVY,align='left'){
+      ctx.font=`600 ${size}px Arial,sans-serif`;
+      const lines=wrap(ctx,value,max);lines.forEach((line,i)=>text(line,x,y+i*size*1.25,size,color,align));return lines.length*size*1.25;
+    }
+    ctx.fillStyle='white';ctx.fillRect(0,0,W,H);ctx.fillStyle=NAVY;ctx.fillRect(0,0,W,320);ctx.fillStyle=GOLD;ctx.fillRect(0,312,W,8);
+    text('@BG.ANALYTICS  ·  COLLEGE FOOTBALL',90,54,37,GOLD);
+    let titleSize=78;ctx.font=`600 ${titleSize}px Arial,sans-serif`;
+    while(wrap(ctx,config.title,1980).length>2&&titleSize>34){titleSize-=2;ctx.font=`600 ${titleSize}px Arial,sans-serif`;}
+    block(config.title,90,125,1980,titleSize,'white');
+    let top=365;top+=block(config.subtitle,90,top,1980,38)+15;
+    top+=block(config.scope,90,top,1980,30,MUTED)+35;
+    const left=280,right=2010,bottom=1810;
+    const xr=domain(config.points.map(p=>p.x)),yr=domain(config.points.map(p=>p.y));
+    ctx.lineWidth=2;
+    for(let i=0;i<=5;i++){
+      const xv=xr[0]+(xr[1]-xr[0])*i/5,yv=yr[0]+(yr[1]-yr[0])*i/5;
+      const px=position(xv,xr,left,right,config.x.reverse),py=position(yv,yr,bottom,top,config.y.reverse);
+      ctx.strokeStyle='#e4eaf0';ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.moveTo(left,py);ctx.lineTo(right,py);ctx.stroke();
+      text(formatted(xv,config.x,(xr[1]-xr[0])/5),px,bottom+25,31,MUTED,'center',400);
+      text(formatted(yv,config.y,(yr[1]-yr[0])/5),left-28,py-17,31,MUTED,'right',400);
+    }
+    ctx.strokeStyle='#99aabd';ctx.strokeRect(left,top,right-left,bottom-top);
+    const centers=[];
+    for(const p of config.points){
+      const x=position(p.x,xr,left,right,config.x.reverse),y=position(p.y,yr,bottom,top,config.y.reverse),size=config.logoSize;
+      const logo=logos.get(p.name);ctx.save();ctx.shadowColor='#0003';ctx.shadowBlur=5;
+      if(logo){const scale=Math.min(size/logo.width,size/logo.height);ctx.drawImage(logo,x-logo.width*scale/2,y-logo.height*scale/2,logo.width*scale,logo.height*scale);}
+      else{ctx.fillStyle='#e6edf5';ctx.beginPath();ctx.arc(x,y,size/2,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+        text(p.name.split(/\s+/).map(w=>w[0]).slice(0,3).join(''),x,y-size*.18,size*.3,NAVY,'center');}
+      ctx.restore();centers.push({x,y,point:p});
+    }
+    block(config.x.label,(left+right)/2,bottom+95,right-left,42,NAVY,'center');
+    ctx.save();ctx.translate(70,(top+bottom)/2);ctx.rotate(-Math.PI/2);block(config.y.label,0,0,bottom-top,42,NAVY,'center');ctx.restore();
+    ctx.fillStyle=NAVY;ctx.fillRect(0,2040,W,120);
+    text('@BG.Analytics',90,2077,37,'white');
+    text('ADVANCED STATS  ·  TEAM LOGO SCATTERPLOT',2070,2082,27,GOLD,'right');
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('PNG creation failed');
+    preview.src=URL.createObjectURL(blob);preview.alt=`${config.title}. ${config.subtitle}. ${config.scope}. X: ${config.x.label}; Y: ${config.y.label}.`;
+    button.disabled=false;
+    button.addEventListener('click',async()=>{try{await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);status.textContent='Copied.';}
+      catch(_){status.textContent='Right-click the image and choose Copy Image.';}});
+    const missing=new Set(config.points.filter(p=>!logos.has(p.name)).map(p=>p.name)).size;
+    status.textContent=`Graphic ready.${missing?` ${missing} team(s) use initials because logos are unavailable.`:''}`;
+    const tooltip=document.getElementById('tooltip');
+    preview.addEventListener('mousemove',event=>{
+      const rect=preview.getBoundingClientRect(),x=(event.clientX-rect.left)*W/rect.width,y=(event.clientY-rect.top)*H/rect.height;
+      const hits=centers.filter(c=>Math.abs(c.x-x)<=config.logoSize/2+8&&Math.abs(c.y-y)<=config.logoSize/2+8);
+      tooltip.style.display=hits.length?'block':'none';
+      tooltip.textContent=hits.map(c=>`${c.point.name} · ${c.point.conference}\n${c.point.detail}\n${config.x.label}: ${formatted(c.point.x,config.x)} | ${config.y.label}: ${formatted(c.point.y,config.y)}`).join('\n\n');
+      tooltip.style.left=Math.max(0,Math.min(event.clientX-rect.left+15,rect.width-350))+'px';
+      tooltip.style.top=Math.max(0,Math.min(event.clientY-rect.top+15,rect.height-250))+'px';
+    });
+    preview.addEventListener('mouseleave',()=>{tooltip.style.display='none'});
+    window.addEventListener('pagehide',()=>{button.disabled=true;URL.revokeObjectURL(preview.src)},{once:true});
+  }catch(error){status.textContent=`Could not create the graphic: ${error.message}. Try changing a setting to retry.`;button.disabled=true;}
+}
+render();
+</script></body></html>

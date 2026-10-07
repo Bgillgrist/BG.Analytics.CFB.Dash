@@ -76,6 +76,7 @@ pages = {
     ],
     "League Wide": [
         st.Page("pages/team_rankings.py", title="Team Rankings"),
+        st.Page("pages/scatterplot_creator.py", title="Scatterplot Creator"),
         st.Page("pages/head_to_head_analysis.py", title="Head to Head Analysis"),
         st.Page("pages/schedule_analysis.py", title="Schedule Analysis"),
         st.Page("pages/predictions.py", title="Predictions"),

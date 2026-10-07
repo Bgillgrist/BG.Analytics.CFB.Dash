@@ -187,3 +187,28 @@ corrections after the betting schema exists.
 Betting interaction tests are in `tests/test_betting_pages.py`; engine, cutoff,
 quote, artifact, and settlement tests live with the shared package. On macOS,
 XGBoost requires an available OpenMP runtime (libomp).
+
+
+## Scatterplot Creator
+
+Open **League Wide → Scatterplot Creator** to compare any two numeric metrics
+from the advanced season or game stats tables. Choose a season, conferences,
+X/Y metrics, and each axis's direction. Presentation controls customize the
+chart title, axis labels, and logo size. The source column name appears beside
+each readable metric label.
+
+Season mode plots stored season statistics as-is. Game mode includes only
+completed FBS-versus-FBS games and allows multiple regular-season/postseason
+weeks. Choose individual team-game points or equal-weight team averages.
+Averages use only games where **both** selected metrics are finite; totals are
+also averaged per game, and contributing game counts appear in the data table.
+Season-table values are not recalculated with the game-mode opponent restriction.
+Conference filters apply to the plotted team, not its opponent. Clearing the
+conference or week selection produces an empty chart state.
+
+The square graphic uses exact point positions, BG.Analytics branding, and team
+logos (initials when unavailable). Hover shows all overlapping points; expand
+**Plotted data** for values and game context. Use **Copy graphic** for the
+2160 × 2160 PNG, or right-click the preview and choose **Copy Image** if browser
+clipboard permissions block the button. Changes regenerate the preview and
+export together. Missing/nonfinite metric pairs are omitted and counted.
