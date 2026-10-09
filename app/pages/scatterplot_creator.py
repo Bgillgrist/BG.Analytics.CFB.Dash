@@ -35,6 +35,12 @@ if source == 'Game stats':
     st.caption('Completed FBS-versus-FBS games only. Team averages weight each game equally, using games with both selected metrics available.')
 else:
     st.caption('Season statistics are used as stored; they are not recalculated using the game-mode FBS-opponent restriction.')
+    try:
+        suggested_weeks = sp.load_season_week_scope(season)
+    except Exception:
+        suggested_weeks = ''
+    season_weeks = st.text_input('Weeks included (season label)', suggested_weeks, key=f'scatter_coverage_{season}', max_chars=180)
+    st.caption('Suggested from available completed game statistics. Season totals do not store a week cutoff; adjust this label if their coverage differs. This changes the label, not the data.')
 conferences = sorted(rows.conference.unique())
 selected = st.multiselect('Conferences', conferences, default=conferences, key=f'scatter_conferences_{context}')
 left, right = st.columns(2)
@@ -59,16 +65,19 @@ if points.empty:
     st.stop()
 mode = 'Season statistics' if weeks is None else 'Team averages · equal weight per game' if average else 'Individual team-game performances'
 scope = 'All conferences' if len(selected) == len(conferences) else ', '.join(selected)
-if weeks is not None:
-    scope += ' | ' + sp.week_scope(weeks)
-config = sp.graphic_config(points, title=title, subtitle=f'{season} · {mode} · {len(points)} points', scope=scope,
-                           x=x, y=y, x_label=x_label, y_label=y_label, reverse_x=reverse_x, reverse_y=reverse_y, logo_size=logo_size)
+coverage = sp.week_scope(weeks) if weeks is not None else season_weeks.strip() or 'Week coverage unavailable'
+if average:
+    scope += ' · Equal-weight game averages'
+st.caption(f'{len(points)} points · {mode}. Dashed lines mark the median of the plotted X and Y values.')
+config = sp.graphic_config(points, title=title, subtitle=f'{season} · {coverage}', scope=scope,
+                           x=x, y=y, x_label=x_label, y_label=y_label, reverse_x=reverse_x, reverse_y=reverse_y, logo_size=logo_size,
+                           layout_key=f'{context}:{x}:{y}:{reverse_x}:{reverse_y}:{average}')
 # Clear the previous frame before logo retrieval so it cannot copy stale settings.
 preview = st.empty()
 with preview.container():
     with st.spinner('Preparing your graphic…'):
         markup = sp.render_graphic(config)
-    components.html(markup, height=940, scrolling=True)
+    components.html(markup, height=1160, scrolling=True)
 with st.expander('Plotted data'):
     columns = ['team', 'conference', 'x', 'y'] + ([c for c in ('opponent', 'season_type', 'week') if c in points] if not average else ['games'])
     st.dataframe(points[columns].rename(columns={'team': 'Team', 'conference': 'Conference', 'x': f'X: {sp.metric_label(x)}',

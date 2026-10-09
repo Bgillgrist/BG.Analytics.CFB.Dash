@@ -16,6 +16,7 @@ def widget(elements,label):
 
 @pytest.fixture
 def page(monkeypatch):
+    monkeypatch.setattr(sp,'load_season_week_scope',lambda season: 'Regular season weeks 0–5')
     monkeypatch.setattr(sp,'load_catalog',lambda source: (['offense_ppa','defense_ppa'] if source == 'Season stats' else ['offense_ppa','defense_ppa','offense_plays'],[2026,2025]))
     monkeypatch.setattr(sp,'load_rows',lambda source,season: rows().assign(offense_plays=60) if source == 'Game stats' else rows().iloc[:1].drop(columns=['week','season_type','opponent']))
     monkeypatch.setattr(sp,'render_graphic',lambda config: '<html>Graphic</html>')
@@ -53,3 +54,15 @@ def test_game_averages_weeks_axes_and_labels(page):
     assert not page.exception
     widget(page.multiselect,'Weeks').set_value([]).run()
     assert not page.exception and any('No points' in i.value for i in page.info)
+
+
+def test_coverage_label_replaces_statistics_and_point_count(page,monkeypatch):
+    configs=[]
+    monkeypatch.setattr(sp,'render_graphic',lambda config: configs.append(config) or '<html>Graphic</html>')
+    page.run()
+    assert configs[-1]['subtitle'] == '2026 · Regular season weeks 0–5'
+    widget(page.text_input,'Weeks included (season label)').set_value('Regular season weeks 0–4').run()
+    assert configs[-1]['subtitle'] == '2026 · Regular season weeks 0–4'
+    widget(page.radio,'Data source').set_value('Game stats').run()
+    assert configs[-1]['subtitle'] == '2026 · Postseason weeks 1'
+    assert 'points' not in configs[-1]['subtitle']

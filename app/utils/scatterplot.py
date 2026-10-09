@@ -1,4 +1,6 @@
 """Read-only scatterplot data, metric metadata, and graphics configuration."""
+import base64
+import hashlib
 import json
 from pathlib import Path
 
@@ -110,6 +112,17 @@ def week_scope(weeks):
     return '; '.join(parts)
 
 
+def load_season_week_scope(season):
+    """Available game-stat coverage; season aggregates do not store a cutoff."""
+    from utils.db import read_df
+    rows = read_df("""SELECT DISTINCT LOWER(COALESCE(g.seasontype, 'regular')) AS season_type,
+        g.week FROM public.team_advanced_game_stats gs
+        JOIN public.game_data g ON g.id = gs.game_id AND g.season = gs.season
+        WHERE gs.season = :season AND g.completed IS TRUE AND g.week IS NOT NULL""",
+        {'season': int(season)})
+    return week_scope(week_options(rows)) if not rows.empty else ''
+
+
 def prepare_points(rows, x, y, metrics, conferences, weeks=None, average=False):
     if x not in metrics or y not in metrics:
         raise ValueError('Choose metrics available in the selected table.')
@@ -128,7 +141,7 @@ def prepare_points(rows, x, y, metrics, conferences, weeks=None, average=False):
     return valid, omitted
 
 
-def graphic_config(points, *, title, subtitle, scope, x, y, x_label, y_label, reverse_x=False, reverse_y=False, logo_size=56):
+def graphic_config(points, *, title, subtitle, scope, x, y, x_label, y_label, reverse_x=False, reverse_y=False, logo_size=56, layout_key=""):
     records = []
     for row in points.to_dict('records'):
         detail = f"{row['games']} contributing games" if 'games' in row else (
@@ -136,6 +149,7 @@ def graphic_config(points, *, title, subtitle, scope, x, y, x_label, y_label, re
         records.append(dict(name=str(row['team']), conference=str(row['conference']), detail=detail,
                             x=float(row['x']), y=float(row['y']), logo=row['logo'], logoFallback=row['logoFallback']))
     return dict(title=title, subtitle=subtitle, scope=scope, points=records, logoSize=logo_size,
+                layoutKey=hashlib.sha256(layout_key.encode()).hexdigest()[:20],
                 x=dict(label=x_label, rate=is_rate(x), reverse=reverse_x),
                 y=dict(label=y_label, rate=is_rate(y), reverse=reverse_y))
 
@@ -145,5 +159,10 @@ def render_graphic(config):
     # Copy before embedding so callers retain their original configuration.
     config = json.loads(json.dumps(config, allow_nan=False))
     embed_conquest_logos(config['points'])
+    from PIL import Image
+    asset = Path(__file__).resolve().parents[1] / 'assets' / 'logo_color.PNG'
+    config['brandLogo'] = 'data:image/png;base64,' + base64.b64encode(asset.read_bytes()).decode('ascii')
+    with Image.open(asset) as image:
+        config['brandBounds'] = list(image.getbbox() or (0, 0, image.width, image.height))
     encoded = json.dumps(config, allow_nan=False).replace('<', '\\u003c')
     return Path(__file__).with_name('scatterplot.html').read_text().replace('__SCATTER_CONFIG__', encoded)

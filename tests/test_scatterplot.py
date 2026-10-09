@@ -72,7 +72,10 @@ def test_config_and_safe_serialization(monkeypatch):
         x=METRICS[0], y=METRICS[1], x_label='X', y_label='Y', reverse_y=True)
     markup = sp.render_graphic(config)
     assert config['title'] not in markup
-    assert json.loads(re.search(r'const config = (.*);',markup).group(1)) == config
+    payload = json.loads(re.search(r'const config = (.*);',markup).group(1))
+    assert payload.pop('brandLogo').startswith('data:image/png;base64,')
+    assert len(payload.pop('brandBounds')) == 4
+    assert payload == config
     assert config['y']['reverse'] is True
     assert config['points'][0]['detail'] == 'vs B · Regular season · Week 1'
 
@@ -93,3 +96,15 @@ def test_game_query_restricts_completed_fbs_and_parameters(monkeypatch):
     assert "LOWER(g.awayclassification) = 'fbs'" in sql
     assert 'gs.season = g.season' in sql
     assert params == {'season':2026}
+
+
+def test_season_week_coverage(monkeypatch):
+    from utils import db
+    calls = []
+    def read(sql, params):
+        calls.append((sql, params))
+        return pd.DataFrame({'season_type':['regular']*3+['postseason'], 'week':[0,1,3,1]})
+    monkeypatch.setattr(db,'read_df',read)
+    assert sp.load_season_week_scope(2026) == 'Regular season weeks 0–1, 3; Postseason weeks 1'
+    assert calls[0][1] == {'season':2026}
+    assert 'g.completed IS TRUE' in calls[0][0]

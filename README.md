@@ -212,3 +212,19 @@ logos (initials when unavailable). Hover shows all overlapping points; expand
 2160 × 2160 PNG, or right-click the preview and choose **Copy Image** if browser
 clipboard permissions block the button. Changes regenerate the preview and
 export together. Missing/nonfinite metric pairs are omitted and counted.
+
+
+Scatterplot graphics include light dashed lines at the median X and median Y of
+the plotted points (including the team averages when that mode is selected).
+Open **Quadrant labels (optional)** above the preview to enter up to four custom
+labels. Drag a label on the image to move it, or adjust its horizontal/vertical
+percentages; blank labels are omitted. Copying or right-clicking the image includes
+the latest label positions. Labels persist for the same season/metric/orientation
+combination during the browser session; **Reset label positions** restores their
+initial quadrant centers while keeping the text.
+
+The graphic subtitle shows the year and weeks, and the footer uses the saved
+BG.Analytics PNG. Game-mode weeks reflect the selection. In season mode,
+**Weeks included (season label)** is suggested from available completed game
+statistics and can be edited: the season aggregate table has no stored cutoff,
+so this label does not guarantee aggregate ingestion coverage or filter the data.
