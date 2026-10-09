@@ -1,7 +1,13 @@
 """Create branded logo scatterplots from the advanced stats tables."""
 import streamlit as st
 import streamlit.components.v1 as components
-from utils import scatterplot as sp
+from utils.scatterplot_runtime import load_scatterplot_helpers
+
+try:
+    sp = load_scatterplot_helpers()
+except RuntimeError as exc:
+    st.error(str(exc))
+    st.stop()
 
 # Streamlit marks the previous component stale as a new rerun starts.
 # Hide it during that interval to prevent mouse or keyboard copying old settings.

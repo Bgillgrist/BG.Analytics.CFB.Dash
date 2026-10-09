@@ -9,6 +9,8 @@ import pandas as pd
 
 from utils.weekly_performances import METRIC_LABELS
 
+SCATTERPLOT_API_VERSION = 2
+
 TABLES = {"Season stats": "team_advanced_season_stats", "Game stats": "team_advanced_game_stats"}
 NUMERIC_TYPES = {"smallint", "integer", "bigint", "numeric", "decimal", "real", "double precision"}
 ADMIN = {"id", "game_id", "team_id", "opponent_id", "season", "week", "year"}
