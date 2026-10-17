@@ -82,3 +82,15 @@ test('footer uses cropped PNG logo and larger centered branding',async()=>{
  assert.equal(image[7]+image[9]/2,2090);
  assert.ok(!r.drawn.some(d=>String(d[0]).includes('TEAM LOGO SCATTERPLOT')));
 });
+
+test('manual label line breaks and blank lines survive rendering and storage',async()=>{
+ const storage=new Map(),input=config([point('A',0,0)]);input.layoutKey='multiline';
+ const r=await render(input,false,storage);
+ await r.elements.q0.handlers.input({target:{value:'Great Offense\n\nBad Defense'}});
+ const first=r.drawn.find(d=>d[0]==='Great Offense'),second=r.drawn.find(d=>d[0]==='Bad Defense');
+ assert.ok(first&&second);assert.equal(second[2]-first[2],90);
+ const restored=await render(input,false,storage);
+ assert.equal(restored.elements.q0.value,'Great Offense\n\nBad Defense');
+ assert.match(template,/<textarea id="q0"/);
+ await r.elements.copy.handlers.click();assert.equal(r.copied.length,1);
+});

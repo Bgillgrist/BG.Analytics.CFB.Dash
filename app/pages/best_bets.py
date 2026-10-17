@@ -26,36 +26,35 @@ if seasons.empty:
 
 season = st.selectbox("Season", seasons.season.astype(int).tolist())
 try:
-    data = betting.load_data(season)
+    data = betting.load_current_data(season)
     refresh_ready = betting.can_refresh()
 except Exception:
-    st.error("Saved betting analysis could not be loaded. Check the database connection and try again.")
+    st.error("Current betting odds could not be loaded or scored. Check the database connection and try again.")
     st.stop()
 
-left, right, reload = st.columns([1,1,2])
+left, right = st.columns(2)
 train_clicked = left.button("Run analysis", type="primary", disabled=not refresh_ready, width="stretch")
-refresh_clicked = right.button("Refresh odds", disabled=not refresh_ready, width="stretch")
-if reload.button("Reload saved results"):
-    betting.load_data.clear()
+if right.button("Reload current odds", width="stretch"):
+    betting.load_current_data.clear()
     st.rerun()
 if not refresh_ready:
-    st.info("Set CFBD_API_KEY in Streamlit secrets to enable analysis and odds refresh. Saved results remain available.")
-st.caption("Run analysis trains and tests all four models. Refresh odds reuses saved models. Filters never start training; updates happen only when requested.")
+    st.info("Set CFBD_API_KEY to train models. Reading current table odds with saved models does not require an API key.")
+st.caption("Current lines come from the betting odds table and are recalculated with saved models when this page loads (cached for 60 seconds). Run analysis trains models; routine odds updates do not require another run.")
 
-if train_clicked or refresh_clicked:
-    with st.status("Training and classifying bets…" if train_clicked else "Refreshing quotes…", expanded=True) as status:
+if train_clicked:
+    with st.status("Training and classifying bets…", expanded=True) as status:
         progress_line = st.empty()
         try:
-            result = betting.execute(season, retrain=train_clicked, progress=progress_line.write)
+            result = betting.execute(season, retrain=True, progress=progress_line.write)
         except ValueError as error:
             status.update(label="Analysis could not be completed", state="error")
             st.error(str(error))
         except Exception:
             status.update(label="Analysis did not complete", state="error")
-            st.error("The run failed. Your last successful results are preserved. Check CFBD access and the database, then retry.")
+            st.error("Training failed. Current table odds remain displayed using the saved models. Check CFBD access and the database, then retry.")
         else:
             status.update(label=f"Saved {result['classifications']:,} classifications across {result['games']:,} games", state="complete")
-            data = betting.load_data(season)
+            data = betting.load_current_data(season)
 
 runs = data["runs"]
 success = runs.loc[runs.status.eq("success")] if not runs.empty else runs
@@ -64,18 +63,18 @@ if not success.empty:
     st.caption(f"Latest successful run: {pd.Timestamp(latest.completed_at).tz_convert('America/New_York'):%b %d, %Y at %I:%M %p %Z} · "
                f"Models trained: {pd.Timestamp(latest.trained_at).tz_convert('America/New_York'):%b %d, %Y at %I:%M %p %Z}")
 if not runs.empty and runs.iloc[-1].status == "failed":
-    st.warning("The most recent attempt failed. The tables below use the last successful saved results.")
-if not data["scopes"].empty and "quote_issues" in data["scopes"]:
-    latest_scopes = data["scopes"].sort_values(["as_of", "completed_at"]).drop_duplicates("game_id", keep="last")
-    quote_issues = [issue for issues in latest_scopes.quote_issues for issue in (issues or [])]
-    if quote_issues:
-        with st.expander(f"{len(quote_issues)} ambiguous sportsbook markets excluded"):
-            st.dataframe(pd.DataFrame(quote_issues), hide_index=True, width="stretch")
-            st.caption("CFBD supplied conflicting quotes for the same sportsbook and market. Both sides are unavailable for that book; verified quotes from other books remain eligible.")
+    st.warning("The most recent training or snapshot run failed. Current odds below are scored using saved models.")
+quote_issues = data.get("quote_issues", [])
+if quote_issues:
+    with st.expander(f"{len(quote_issues)} ambiguous sportsbook markets excluded"):
+        st.dataframe(pd.DataFrame(quote_issues), hide_index=True, width="stretch")
+        st.caption("The betting odds table contains conflicting quotes for the same sportsbook and market. Both sides are excluded for that book.")
+if data.get("model_message"):
+    st.info(data["model_message"])
 
 candidates = betting.current_candidates(data)
 if candidates.empty:
-    st.info("No classified upcoming bets are saved. Run analysis to create them; games without usable odds or predictions remain unavailable.")
+    st.info("No classified upcoming bets are available from the current odds table and saved models. Games without usable odds or predictions remain unavailable.")
 else:
     one, two, three = st.columns([2,1,1])
     model = one.selectbox("Model", list(MODELS), index=1, format_func=MODELS.get)
@@ -103,9 +102,7 @@ else:
     first.metric("Matching bets", total)
     second.metric("Strong / very strong", int(strong))
     third.metric("Largest estimated edge", f"{selected.edge_pp.max():+.1f} pp" if total else "—")
-    if candidates.quote_age_hours.max() >= 24:
-        st.warning("Some quotes are more than 24 hours old. Use Refresh odds before treating them as current offers.")
-    st.caption("One pick per game and market for the selected model. Odds timestamps show CFBD retrieval time, not when a sportsbook last changed its price.")
+    st.caption("One pick per game and market for the selected model. Table read time is when this page loaded the odds; sportsbook update time is not available.")
     if shown.empty:
         st.info("No bets match these filters.")
     else:

@@ -47,6 +47,12 @@ def setup_pages(monkeypatch):
     monkeypatch.setattr(betting,"load_seasons",lambda:pd.DataFrame({"season":[2026,2025]}))
     monkeypatch.setattr(betting,"load_data",lambda *args:data)
     monkeypatch.setattr(betting,"can_refresh",lambda:True)
+    def current_data(*args):
+        current = betting.current_candidates(data)
+        current = current.drop(columns=["as_of", "quote_age_hours"], errors="ignore")
+        return dict(data, current=True, candidates=current, quote_issues=[])
+    monkeypatch.setattr(betting,"load_current_data",current_data)
+    current_data.clear = lambda: None
     calls=[]
     def execute(season,retrain,progress):
         calls.append((season,retrain))
@@ -77,14 +83,14 @@ def test_explicit_training_refresh_and_failure_preserve_results(setup_pages,monk
     page=AppTest.from_file(str(ROOT/"app/pages/best_bets.py"),default_timeout=20).run()
     widget(page.button,"Run analysis").click().run()
     assert calls==[(2026,True)] and not page.exception
-    widget(page.button,"Refresh odds").click().run()
-    assert calls[-1]==(2026,False) and not page.exception
+    widget(page.button,"Reload current odds").click().run()
+    assert calls==[(2026,True)] and not page.exception
     def fail(*args,**kwargs):
         raise RuntimeError("fixture failure")
     monkeypatch.setattr(betting,"execute",fail)
-    widget(page.button,"Refresh odds").click().run()
+    widget(page.button,"Run analysis").click().run()
     assert not page.exception
-    assert any("last successful" in message.value for message in page.error)
+    assert any("Training failed" in message.value for message in page.error)
     assert len(page.dataframe[0].value)==2
 
 
@@ -136,3 +142,57 @@ def test_history_keeps_timeline_when_latest_collection_has_no_quotes(setup_pages
     assert len(page.dataframe[-1].value)>0
     assert any(metric.label=="Forecasts in this view" and metric.value=="0" for metric in page.metric)
     assert calls==[]
+
+
+def test_current_table_lines_are_rescored_without_snapshots_or_api(monkeypatch):
+    from contextlib import contextmanager
+
+    st.cache_data.clear()
+    games = pd.DataFrame([dict(game_id="1", season=2026, week=8, season_type="regular",
+        kickoff=pd.Timestamp("2099-10-17T16:00Z"), kickoff_known=True,
+        home_team="Opponent", away_team="Ohio State", home_conference="SEC", away_conference="Big Ten",
+        homeclassification="fbs", awayclassification="fbs", completed=False, cancelled=False)])
+    data = dict(games=games, runs=pd.DataFrame([dict(status="success")]),
+                scopes=pd.DataFrame(), candidates=pd.DataFrame(), metrics={})
+    monkeypatch.setattr(betting, "credentials", lambda: object())
+    monkeypatch.setattr(betting, "read_data", lambda *args: dict(data))
+    class Connection:
+        read_only = False
+    connection = Connection()
+    @contextmanager
+    def connect(config):
+        yield connection
+    monkeypatch.setattr(betting.store, "connect", connect)
+    monkeypatch.setattr(betting.store, "latest_model", lambda *args:
+        dict(artifact={"version": betting.MODEL_VERSION}, metrics={}))
+    monkeypatch.setattr(betting.store, "load_inputs", lambda *args: (games, pd.DataFrame(), pd.DataFrame()))
+    monkeypatch.setattr(betting, "prepare_games", lambda frame: frame)
+    monkeypatch.setattr(betting, "build_features", lambda games, *args, **kwargs: games)
+    payload = [dict(id="1", lines=[dict(provider="DraftKings", spread=-1.5)])]
+    monkeypatch.setattr(betting.store, "load_historical_quotes", lambda *args: payload)
+    def score(bundle, targets, quotes):
+        if quotes.empty:
+            return pd.DataFrame()
+        # Check the model's spread input is updated alongside the displayed quote.
+        assert targets.iloc[0].avg_spread == quotes.loc[quotes.side.eq("home"), "handicap"].iloc[0]
+        result = quotes.copy()
+        result["model"] = "spread"
+        result["probability"] = .5 + result.handicap / 100
+        result["edge_pp"] = result.handicap
+        return result
+    monkeypatch.setattr(betting, "score_quotes", score)
+    monkeypatch.setattr(betting, "run_analysis", lambda *args, **kwargs: pytest.fail("Must not run analysis"))
+    first = betting.current_candidates(betting.load_current_data(2026))
+    assert first.loc[first.side.eq("away"), "handicap"].iloc[0] == 1.5
+    payload[0]["lines"][0]["spread"] = -3.5
+    betting.load_current_data.clear()
+    second = betting.current_candidates(betting.load_current_data(2026))
+    ohio = second.loc[second.side.eq("away")].iloc[0]
+    assert ohio.handicap == 3.5 and ohio.probability == .535 and ohio.edge_pp == 3.5
+    assert "quote_age_hours" not in second and "table_read_at" in second
+    assert connection.read_only
+    # Deleted odds must disappear, never fall back to a saved quote.
+    payload.clear()
+    betting.load_current_data.clear()
+    assert betting.current_candidates(betting.load_current_data(2026)).empty
+    st.cache_data.clear()

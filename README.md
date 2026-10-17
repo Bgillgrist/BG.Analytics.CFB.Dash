@@ -162,12 +162,19 @@ interaction tests require Streamlit. No database writes or export controls are a
 **Betting → Best Bets** classifies upcoming FBS-vs-FBS moneylines and spreads
 using four models: spread-aware and TeamRankings without spread input, each with
 and without pregame advanced statistics. Run analysis explicitly retrains/tests
-all four models; Refresh odds reuses their saved artifacts. Filters and page loads
-never train, refresh odds, or write to the database.
+all four models. Best Bets reads current lines from `public.betting_odds` and
+recalculates probabilities, spread inputs, and edges with the saved models on page
+load (cached for 60 seconds). Reload current odds clears that cache immediately.
+Page loads never train, call the odds API, or write snapshots. Missing current
+quotes do not fall back to saved lines. Table read time is not sportsbook update
+time; the odds table does not provide that timestamp.
 
 Set `CFBD_API_KEY` alongside `NEON_DATABASE_URL` in Streamlit secrets to enable
-these controls. The first explicit run creates additive `public.betting_*` tables.
-Saved results can be viewed without the API key. No Betting jobs are scheduled.
+training. The first explicit run creates additive `public.betting_*` tables.
+Current table odds can be scored with saved models without the API key. The existing
+odds ETL supplies updates; no additional Betting jobs are scheduled. Betting History
+continues to use explicit saved runs, so viewing current bets does not create a
+historical recommendation record.
 
 **Betting → Betting History** grades the last successful snapshot completed before
 each game's kickoff, once per game/model/market, at its saved line. Earlier
@@ -217,7 +224,7 @@ export together. Missing/nonfinite metric pairs are omitted and counted.
 Scatterplot graphics include light dashed lines at the median X and median Y of
 the plotted points (including the team averages when that mode is selected).
 Open **Quadrant labels (optional)** above the preview to enter up to four custom
-labels. Drag a label on the image to move it, or adjust its horizontal/vertical
+labels. Press **Enter** within a label to insert a line break (preserved in the PNG). Drag a label on the image to move it, or adjust its horizontal/vertical
 percentages; blank labels are omitted. Copying or right-clicking the image includes
 the latest label positions. Labels persist for the same season/metric/orientation
 combination during the browser session; **Reset label positions** restores their

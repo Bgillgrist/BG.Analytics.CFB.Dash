@@ -8,6 +8,11 @@ import streamlit as st
 from cfb_betting.domain import MODELS, TIERS, last_pregame, recommendations, settle, utc
 from cfb_betting.store import Config, read_data, read_seasons
 from cfb_betting.service import run_analysis
+from cfb_betting import store
+from cfb_betting.domain import normalize_quotes
+from cfb_betting.features import build_features, prepare_games, quote_inputs
+from cfb_betting.models import MODEL_VERSION, score_quotes
+from cfb_betting.service import upcoming
 
 
 def credentials():
@@ -34,9 +39,44 @@ def load_data(season, source="live"):
     return read_data(credentials(), int(season), source)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def load_current_data(season):
+    """Score table odds with saved models, without API calls or snapshot writes."""
+    config = credentials()
+    data = read_data(config, int(season))
+    data.update(current=True, candidates=pd.DataFrame(), quote_issues=[], model_message=None)
+    if data["runs"].empty or not data["runs"].status.eq("success").any():
+        data["model_message"] = "Run analysis once to train models for this season. Current odds come from the betting odds table."
+        return data
+    with store.connect(config) as conn:
+        conn.read_only = True
+        saved = store.latest_model(conn, int(season))
+        if saved["artifact"]["version"] != MODEL_VERSION:
+            data["model_message"] = "Run analysis to update the saved models for this season."
+            return data
+        as_of = utc()
+        games, ratings, stats = store.load_inputs(conn, int(season))
+        eligible = upcoming(prepare_games(games), int(season), as_of)
+        if eligible.empty:
+            return data
+        quotes = normalize_quotes(store.load_historical_quotes(conn, eligible.game_id.tolist()), eligible.game_id)
+    data["quote_issues"] = quotes.attrs.get("quote_issues", [])
+    frame = build_features(games, ratings, stats, as_of, target_ids=eligible.game_id)
+    targets = quote_inputs(upcoming(frame, int(season), as_of), quotes)
+    candidates = score_quotes(saved["artifact"], targets, quotes)
+    if not candidates.empty:
+        metadata = targets[["game_id", "kickoff", "week", "season_type", "home_team", "away_team"]]
+        candidates = candidates.merge(metadata, on="game_id", validate="many_to_one")
+        candidates["table_read_at"] = as_of
+    data["candidates"] = candidates
+    data["metrics"] = saved["metrics"]
+    return data
+
+
 def execute(season, retrain, progress):
     result = run_analysis(credentials(), int(season), retrain=retrain, progress=progress)
     load_data.clear()
+    load_current_data.clear()
     return result
 
 
@@ -46,13 +86,19 @@ def current_candidates(data, now=None):
         return pd.DataFrame()
     games["kickoff"] = pd.to_datetime(games.kickoff, utc=True, errors="coerce")
     games = games.loc[games.kickoff.gt(utc(now)) & ~games.completed.fillna(False).eq(True) & ~games.cancelled.fillna(False).eq(True)]
-    candidates = last_pregame(data["scopes"], data["candidates"], games, best_only=False)
+    if data.get("current"):
+        candidates = data["candidates"].copy()
+        if not candidates.empty:
+            candidates = candidates.loc[candidates.game_id.isin(games.game_id)].copy()
+    else:
+        candidates = last_pregame(data["scopes"], data["candidates"], games, best_only=False)
     if candidates.empty:
         return candidates
     grouped = candidates.groupby(["game_id", "market", "side", "provider"]).probability
     candidates["model_range_pp"] = grouped.transform("max").sub(grouped.transform("min")) * 100
     candidates["models_available"] = grouped.transform("count")
-    candidates["quote_age_hours"] = (utc(now) - pd.to_datetime(candidates.as_of, utc=True)).dt.total_seconds() / 3600
+    if not data.get("current"):
+        candidates["quote_age_hours"] = (utc(now) - pd.to_datetime(candidates.as_of, utc=True)).dt.total_seconds() / 3600
     return candidates
 
 
@@ -75,7 +121,7 @@ def display_frame(frame):
     """Keep numeric probabilities sortable; formatting is a page concern."""
     columns = ["classification", "team", "opponent", "market", "provider", "handicap", "american",
                "probability", "baseline", "edge_pp", "push_probability", "expected_return", "model_spread",
-               "model_range_pp", "models_available", "kickoff", "as_of", "quote_age_hours",
+               "model_range_pp", "models_available", "kickoff", "as_of", "quote_age_hours", "table_read_at",
                "model", "model_version", "result", "homepoints", "awaypoints", "units", "snapshot_age_hours"]
     shown = frame[[c for c in columns if c in frame]].copy()
     for column in ["probability", "baseline", "push_probability", "expected_return"]:
@@ -83,7 +129,7 @@ def display_frame(frame):
             shown[column] = pd.to_numeric(shown[column], errors="coerce") * 100
     if "model" in shown:
         shown["model"] = shown.model.map(MODELS).fillna(shown.model)
-    for column in ["kickoff", "as_of"]:
+    for column in ["kickoff", "as_of", "table_read_at"]:
         if column in shown:
             shown[column] = pd.to_datetime(shown[column], utc=True).dt.tz_convert("America/New_York")
     return shown
@@ -113,6 +159,7 @@ def table_config():
         "model_range_pp": st.column_config.NumberColumn("Model range (pp)", format="%.1f"),
         "models_available": "Models compared", "kickoff": "Kickoff (Eastern)",
         "as_of": "Odds retrieved (Eastern)", "quote_age_hours": st.column_config.NumberColumn("Quote age (hours)", format="%.1f"),
+        "table_read_at": "Table read (Eastern)",
         "model": "Model", "model_version": "Model version", "result": "Result",
         "homepoints": "Home score", "awaypoints": "Away score",
         "units": st.column_config.NumberColumn("ML paper units", format="%+.2f"),
