@@ -28,8 +28,11 @@ season = st.selectbox("Season", seasons.season.astype(int).tolist())
 try:
     data = betting.load_current_data(season)
     refresh_ready = betting.can_refresh()
-except Exception:
-    st.error("Current betting odds could not be loaded or scored. Check the database connection and try again.")
+except betting.BettingScoringError as error:
+    st.error(str(error))
+    st.stop()
+except Exception as error:
+    st.error(f"Current betting data could not be prepared ({type(error).__name__}). Check the database connection and saved models, then try again.")
     st.stop()
 
 left, right = st.columns(2)

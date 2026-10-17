@@ -15,6 +15,24 @@ from cfb_betting.models import MODEL_VERSION, score_quotes
 from cfb_betting.service import upcoming
 
 
+class BettingScoringError(RuntimeError):
+    """Safe scoring diagnostics for the page, without connection details."""
+
+
+def score_current_quotes(bundle, targets, quotes):
+    try:
+        return score_quotes(bundle, targets, quotes)
+    except Exception as error:
+        if "could not be loaded" in str(error) and "xgboost" in str(error).lower():
+            raise BettingScoringError(
+                "Current odds loaded, but the model runtime could not start. "
+                "Install the OpenMP runtime (libomp on macOS; libgomp1 on Linux), then restart the dashboard."
+            ) from error
+        raise BettingScoringError(
+            f"Current odds loaded, but saved-model scoring failed ({type(error).__name__})."
+        ) from error
+
+
 def credentials():
     from utils.db import _get_db_url
     key = os.getenv("CFBD_API_KEY")
@@ -63,7 +81,7 @@ def load_current_data(season):
     data["quote_issues"] = quotes.attrs.get("quote_issues", [])
     frame = build_features(games, ratings, stats, as_of, target_ids=eligible.game_id)
     targets = quote_inputs(upcoming(frame, int(season), as_of), quotes)
-    candidates = score_quotes(saved["artifact"], targets, quotes)
+    candidates = score_current_quotes(saved["artifact"], targets, quotes)
     if not candidates.empty:
         metadata = targets[["game_id", "kickoff", "week", "season_type", "home_team", "away_team"]]
         candidates = candidates.merge(metadata, on="game_id", validate="many_to_one")

@@ -196,3 +196,18 @@ def test_current_table_lines_are_rescored_without_snapshots_or_api(monkeypatch):
     betting.load_current_data.clear()
     assert betting.current_candidates(betting.load_current_data(2026)).empty
     st.cache_data.clear()
+
+
+def test_scoring_runtime_failure_is_not_reported_as_database_failure(setup_pages, monkeypatch):
+    def fail(*args):
+        raise RuntimeError('XGBoost Library (libxgboost.dylib) could not be loaded. private runtime path')
+    monkeypatch.setattr(betting, 'score_quotes', fail)
+    with pytest.raises(betting.BettingScoringError, match='OpenMP') as error:
+        betting.score_current_quotes({}, pd.DataFrame(), pd.DataFrame())
+    assert 'private runtime path' not in str(error.value)
+    def failed_load(*args):
+        raise error.value
+    monkeypatch.setattr(betting, 'load_current_data', failed_load)
+    page = AppTest.from_file(str(ROOT/'app/pages/best_bets.py'), default_timeout=20).run()
+    assert not page.exception
+    assert any('Current odds loaded, but the model runtime could not start' in item.value for item in page.error)
