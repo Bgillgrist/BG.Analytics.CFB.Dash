@@ -82,7 +82,9 @@ pages = {
         st.Page("pages/predictions.py", title="Predictions"),
         st.Page("pages/weekly_performances.py", title="Weekly Performances"),
     ],
-    "Betting": [
+    "Model Performance": [
+        st.Page("pages/predictive_performance.py", title="Predictive Performance"),
+        st.Page("pages/model_builder.py", title="Model Builder"),
         st.Page("pages/best_bets.py", title="Best Bets"),
         st.Page("pages/betting_history.py", title="Betting History"),
     ],

@@ -159,7 +159,7 @@ Run all data and optional Streamlit interaction tests with `python -m pytest tes
 Weekly query and scoring tests are in `tests/test_weekly_performances.py`; its page
 interaction tests require Streamlit. No database writes or export controls are added.
 
-**Betting → Best Bets** classifies upcoming FBS-vs-FBS moneylines and spreads
+**Model Performance → Best Bets** classifies upcoming FBS-vs-FBS moneylines and spreads
 using four models: spread-aware and TeamRankings without spread input, each with
 and without pregame advanced statistics. Run analysis explicitly retrains/tests
 all four models. Best Bets reads current lines from `public.betting_odds` and
@@ -176,7 +176,7 @@ odds ETL supplies updates; no additional Betting jobs are scheduled. Betting His
 continues to use explicit saved runs, so viewing current bets does not create a
 historical recommendation record.
 
-**Betting → Betting History** grades the last successful snapshot completed before
+**Model Performance → Betting History** grades the last successful snapshot completed before
 each game's kickoff, once per game/model/market, at its saved line. Earlier
 classifications remain in the timeline. Spread hit rate excludes pushes and uses
 a 50% comparison baseline; spread ROI is unavailable. Moneyline paper returns
@@ -235,3 +235,82 @@ BG.Analytics PNG. Game-mode weeks reflect the selection. In season mode,
 **Weeks included (season label)** is suggested from available completed game
 statistics and can be edited: the season aggregate table has no stored cutoff,
 so this label does not guarantee aggregate ingestion coverage or filter the data.
+
+## Model Performance
+
+The former **Betting** navigation group is now **Model Performance**, containing
+**Predictive Performance**, **Model Builder**, **Best Bets**, and **Betting History**.
+Install the dashboard requirements to enable the new pages; NumPy, scikit-learn,
+and XGBoost are explicit dependencies. Both new pages use `NEON_DATABASE_URL`,
+require no CFBD API key, and operate entirely through database reads. They create
+no database tables, scheduled jobs, or production model artifacts.
+
+**Predictive Performance** evaluates the main game model's FBS-vs-FBS forecasts.
+The default saved-pregame record selects one successful manual/nightly forecast
+per game, requiring its run creation, detail creation, and completion timestamps
+to precede kickoff (or the selected 24-hour/seven-day lead time). A missing/TBD
+kickoff cannot establish eligibility. Version/team/conference filters apply after
+selection and cannot substitute an older forecast. Existing backfills appear only
+under **Historical research**, using their intended run dates rather than their
+later creation times; they are never pooled with the saved-pregame record.
+
+Current `game_data` scores grade predictions, including score corrections. The
+stored home spread is negated to recover predicted home margin. Each metric uses
+its own valid sample: missing probabilities do not remove usable margin/total
+predictions. Exact 50% forecasts have no winner call but remain in probability
+metrics. Invalid final scores, cancellations, unfinished games, and missing
+forecasts appear in the game audit and coverage counts. Probability calibration
+uses ten bins and descriptive 95% Wilson intervals. Bias is predicted minus actual;
+positive home margin means the home team outscores the away team. Participant
+breakdowns count team appearances, so they must not be summed as league games.
+CSV downloads include filtered audit records, metrics, calibration, and breakdowns.
+
+**Model Builder** supports winner probability, home margin, and combined-points
+targets, with logistic/ridge regression, random forest, and XGBoost. Start with
+the five Base inputs or use Advanced to select any numeric advanced-game metric.
+The allowed metric catalog excludes IDs and administrative fields. Home/away
+means use season-to-date, current-season last-five, or previous-season windows;
+each metric has a nonmissing contributing-game count. Only earlier completed
+FBS-vs-FBS games with known kickoff times contribute. Ratings must also precede
+the target game's date. Same-day inputs are excluded, and future-game inputs
+are capped at the fitting date in America/New_York. Final season aggregates are
+never used. Annual talent and corrected source data lack publication snapshots.
+Optional sportsbook spreads/totals are off by default and labeled market-assisted
+research because historical quote collection times are unavailable.
+
+Press **Run experiment** to evaluate expanding yearly folds. The default test
+season is the latest completed past season. Training uses only earlier seasons
+from the selected start, with at least 30 completed games and two target values
+per fold. All-missing predictors are removed per training fold. Linear models
+use training medians, missingness indicators, scaling, and regularization;
+forests use training medians; XGBoost handles missingness natively. Seed 42 and
+one worker are used throughout, without automatic tuning or probability
+calibration. Linear importance shows standardized coefficients; tree importance
+uses held-out permutation score decreases over three deterministic shuffles.
+Repeated tuning against the same held-out seasons makes them development data.
+
+Results retain their original settings when controls change or a run fails.
+Experiment identities include configuration, input hashes, eligibility day,
+builder version, and library versions. Comparisons use common held-out game IDs
+within the same target; no common games means no comparison score. Session
+results disappear when the session ends, so download them before leaving.
+
+**Fit for upcoming games** explicitly refits the saved experiment configuration
+on all eligible completed games from its starting season through the current
+cutoff. It scores only future, uncompleted, uncancelled games with known kickoff
+times in the selected season. The fit has its own timestamp, data hash, dataset,
+and membership export; historical held-out predictions remain fixed. Neither
+action changes the production model or the dashboard's stored predictions.
+
+Downloads include UTF-8 CSVs for the dataset, fold membership, held-out and
+upcoming predictions, metrics and training-mean benchmarks, importance,
+missingness, settings, and feature/target definitions, individually or as a ZIP.
+Probabilities remain on a 0–1 scale; missing values are blank. Read game IDs as
+text in R, for example `read.csv("predictions.csv", colClasses = c(game_id = "character"))`.
+Use `folds.csv` to distinguish training/evaluation membership, since a game can
+enter the training set for a later fold. Source reads use the existing five-minute
+database cache; fitting and feature preparation occur only on explicit actions.
+
+Focused checks:
+`python -m pytest tests/test_predictive_performance.py tests/test_model_builder.py tests/test_model_pages.py -q`.
+Tests use synthetic inputs and fit real small models without database access.

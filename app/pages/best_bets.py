@@ -11,7 +11,7 @@ except ModuleNotFoundError:
     st.stop()
 
 NAVY = "#0C2C56"
-st.markdown('<div style="color:#64748b;font-size:.8rem;letter-spacing:.12em">BETTING / CURRENT ANALYSIS</div>', unsafe_allow_html=True)
+st.markdown('<div style="color:#64748b;font-size:.8rem;letter-spacing:.12em">MODEL PERFORMANCE / CURRENT ANALYSIS</div>', unsafe_allow_html=True)
 st.title("Best Bets")
 st.caption("Compare every available side and sportsbook. Edge classifications describe model estimates; history shows how they perform.")
 

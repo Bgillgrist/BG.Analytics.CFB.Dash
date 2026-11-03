@@ -10,7 +10,7 @@ except ModuleNotFoundError:
     st.error("Install the dashboard requirements, including the bundled betting package, to use this page.")
     st.stop()
 
-st.markdown('<div style="color:#64748b;font-size:.8rem;letter-spacing:.12em">BETTING / PERFORMANCE</div>', unsafe_allow_html=True)
+st.markdown('<div style="color:#64748b;font-size:.8rem;letter-spacing:.12em">MODEL PERFORMANCE / BETTING HISTORY</div>', unsafe_allow_html=True)
 st.title("Betting History")
 st.caption("Each game, model, and market is graded once using its last saved pregame classification and exact line.")
 
